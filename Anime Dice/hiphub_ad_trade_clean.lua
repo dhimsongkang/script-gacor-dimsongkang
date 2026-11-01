@@ -2333,6 +2333,7 @@ local function syncRelayPeersNow()
                 if ok2 and data and data.user and data.user ~= localPlayer.Name then
                     local lower = data.user:lower():gsub("%s+", "")
                     RelayPeers[lower] = {
+                        app = data.app or "hiphub",
                         user = data.user,
                         role = data.role or "Receiver",
                         done = data.done or false,
@@ -2362,6 +2363,7 @@ local function broadcastRelayHeartbeat()
     
     task.spawn(function()
         local payload = HttpService:JSONEncode({
+            app = "hiphub",
             user = localPlayer.Name,
             role = Settings.Role,
             done = (Settings.Role == "Receiver" and Settings.HasReceived) or false,
@@ -2653,16 +2655,16 @@ local function isTargetPlayer(username)
     -- 2. If AcceptAnyRequester is true, verify through Cloud Relay (filters strangers out)
     if Settings.AcceptAnyRequester then
         local isVerified, peer = isVerifiedPeer(username)
-        if isVerified and peer and peer.role == "Receiver" then
-            return true
+        if isVerified and peer and (peer.app == "hiphub" or peer.role == "Receiver") then
+            return true, peer
         end
         -- If Cloud Relay is disabled, fallback to open accept
         if Settings.CloudRelay and not Settings.CloudRelay.Enabled then
-            return true
+            return true, { source = "RelayDisabled", user = username }
         end
-        return false
+        return false, nil
     end
-    return false
+    return false, nil
 end
 
 local function isTargetCompleted(username)
@@ -2763,14 +2765,15 @@ InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(ev
             
             if isAllowed then
                 if isTargetCompleted(sender.Name) then
-                    log(string.format("%s has already received their unit limit (%d/%d). Declining.", sender.Name, Settings.TradedUsers[sender.Name] or 0, Settings.UnitsPerPlayer), UI.Colors.accentOrange)
+                    log(string.format("[HipHub] %s has already received their unit limit (%d/%d). Declining.", sender.Name, Settings.TradedUsers[sender.Name] or 0, Settings.UnitsPerPlayer), UI.Colors.accentOrange)
                     RespondToRequestRemote:FireServer(false)
                 elseif Settings.AutoAcceptRequest then
-                    log(string.format("Accepting trade request from alt %s...", sender.Name), UI.Colors.successGreen)
+                    log(string.format("[HipHub Verified] Menerima trade request dari sesama pengguna HipHub: %s!", sender.Name), UI.Colors.successGreen)
                     RespondToRequestRemote:FireServer(true)
                 end
             else
-                log(string.format("Ignoring request from non-target user %s", sender.Name), UI.Colors.textMuted)
+                log(string.format("[HipHub Block] Menolak request dari %s: Bukan sesama pengguna HipHub / Orang asing.", sender.Name), UI.Colors.textMuted)
+                RespondToRequestRemote:FireServer(false)
             end
         elseif Settings.Role == "Receiver" then
             local isHost = isHostPlayer(sender) or (Settings.AcceptAnyRequester == true)
@@ -3053,34 +3056,14 @@ task.spawn(function()
             end
             
             
-            if Settings.Role == "Sender" and Settings.AutoRequest then
-                local nextTarget = getNextEligibleTarget()
-                if not nextTarget and Settings.CloudRelay and Settings.CloudRelay.Enabled then
-                    syncRelayPeersNow()
-                    nextTarget = getNextEligibleTarget()
-                end
-                if nextTarget then
-                    lastRequestTime = now
-                    log(string.format("Auto-sending trade request to next queue target: %s", nextTarget.Name), UI.Colors.accentBlend)
-                    RequestTradeRemote:FireServer(nextTarget)
+            if Settings.Role == "Sender" then
+                -- Sender sits as passive listener/acceptor to completely eliminate trade request collisions!
+                -- Only verified HipHub receivers on VPS send trade requests.
+                local discoveredCount = getDiscoveredReceiverCount()
+                if discoveredCount > 0 then
+                    setStatus(string.format("WAITING FOR ALTS (%d ONLINE)", discoveredCount), UI.Colors.accentCyan)
                 else
-                    if Settings.AcceptAnyRequester or #(Settings.TargetPlayers or {}) == 0 then
-                        setStatus("WAITING FOR ALTS TO REQUEST", UI.Colors.textSecondary)
-                    else
-                        
-                        local anyPending = false
-                        for _, t in ipairs(Settings.TargetPlayers or {}) do
-                            if t ~= "" and not isTargetCompleted(t) then
-                                anyPending = true
-                                break
-                            end
-                        end
-                        if not anyPending and #(Settings.TargetPlayers or {}) > 0 then
-                            setStatus("ALL TARGETS COMPLETED", UI.Colors.successGreen)
-                        else
-                            setStatus("WAITING FOR TARGETS", UI.Colors.textSecondary)
-                        end
-                    end
+                    setStatus("WAITING FOR HIPHUB ALTS TO REQUEST", UI.Colors.textSecondary)
                 end
             end
             
