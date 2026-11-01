@@ -104,7 +104,7 @@ local DEFAULT_CONFIG = {
         ["Enabled"] = false,
         ["Farmsync"] = { ["Enabled"] = false, ["Folder From"] = "", ["Folder To"] = "", ["Without Replace"] = false, ["Config ID"] = nil },
         ["Yummy"] = { ["Enabled"] = false },
-        ["Farmerv5"] = { ["Enabled"] = false, ["API Key"] = "ak_9b01456dd738b682fa9ef5ed989130bf471794cf06e91d6bc9474507cd72d1bc", ["Option"] = 1 },
+        ["Farmerv5"] = { ["Enabled"] = true, ["API Key"] = "ak_9b01456dd738b682fa9ef5ed989130bf471794cf06e91d6bc9474507cd72d1bc", ["Option"] = 1 },
     }
 }
 
