@@ -1633,47 +1633,49 @@ task.spawn(function()
             end
         else
             if not inTradeSession and (Config.Settings and Config.Settings["Auto Loop Trade"]) then
-                local invLoaded = false
-                pcall(function()
-                    invLoaded = (DataController and DataController.Inventory and DataController.Inventory() ~= nil)
-                end)
-
-                if invLoaded and (tick() - scriptStartTime >= 6) and (not hasItemsToSend()) then
-                    if tick() - lastEmptyNoticeTime >= 15 then
-                        lastEmptyNoticeTime = tick()
-                        StatusBadge.Text = role:upper() .. " [KOSONG]"
-                        StatusBadge.TextColor3 = THEME.TextMuted
-                        addLog("Inventaris kosong. Mengirim sinyal ganti akun ke FarmerV5...", THEME.TextMuted)
+                local recPlayer = Players:FindFirstChild(Config.Receiver)
+                if not recPlayer then
+                    -- Receiver TIDAK ADA di server ini: Prioritaskan mencari dan mengikuti server Receiver!
+                    if not isHopping and Config.Hop and Config.Hop.Enabled then
+                        local hopMode = Config.Hop.Mode or (Config.Hop["Use JobFile"] and "JobFile" or "Friend")
+                        if hopMode == "Friend" then
+                            followReceiverFriend()
+                        elseif hopMode == "JobFile" then
+                            pcall(function()
+                                if isfile and isfile(JOB_FILE) then
+                                    local targetJob = readfile(JOB_FILE):gsub("%s+", "")
+                                    if targetJob ~= "" and targetJob ~= game.JobId then
+                                        isHopping = true
+                                        addLog("Receiver di server lain (" .. string.sub(targetJob, 1, 8) .. "). Mengikuti receiver...", THEME.Cyan)
+                                        task.wait(2)
+                                        TeleportService:TeleportToPlaceInstance(game.PlaceId, targetJob, LocalPlayer)
+                                        task.wait(12)
+                                        isHopping = false
+                                    end
+                                end
+                            end)
+                        end
                     end
-                    triggerFarmerV5Switch("Inventaris Kosong")
                 else
-                    local recPlayer = Players:FindFirstChild(Config.Receiver)
-                    if recPlayer then
+                    -- Receiver ADA di server ini: Cek apakah masih ada barang untuk ditrade
+                    local invLoaded = false
+                    pcall(function()
+                        invLoaded = (DataController and DataController.Inventory and DataController.Inventory() ~= nil)
+                    end)
+
+                    if invLoaded and (tick() - scriptStartTime >= 6) and (not hasItemsToSend()) then
+                        if tick() - lastEmptyNoticeTime >= 15 then
+                            lastEmptyNoticeTime = tick()
+                            StatusBadge.Text = role:upper() .. " [KOSONG]"
+                            StatusBadge.TextColor3 = THEME.TextMuted
+                            addLog("Inventaris kosong. Mengirim sinyal ganti akun ke FarmerV5...", THEME.TextMuted)
+                        end
+                        triggerFarmerV5Switch("Inventaris Kosong")
+                    else
                         if tick() - lastRequestTime >= 8 then
                             lastRequestTime = tick()
                             addLog("Mengirim trade request ke: " .. Config.Receiver, THEME.TextMuted)
                             RequestTradeRemote:FireServer(recPlayer)
-                        end
-                    else
-                        if not isHopping and Config.Hop and Config.Hop.Enabled then
-                            local hopMode = Config.Hop.Mode or (Config.Hop["Use JobFile"] and "JobFile" or "Friend")
-                            if hopMode == "Friend" then
-                                followReceiverFriend()
-                            elseif hopMode == "JobFile" then
-                                pcall(function()
-                                    if isfile and isfile(JOB_FILE) then
-                                        local targetJob = readfile(JOB_FILE):gsub("%s+", "")
-                                        if targetJob ~= "" and targetJob ~= game.JobId then
-                                            isHopping = true
-                                            addLog("Receiver di server lain (" .. string.sub(targetJob, 1, 8) .. "). Mengikuti receiver...", THEME.Cyan)
-                                            task.wait(2)
-                                            TeleportService:TeleportToPlaceInstance(game.PlaceId, targetJob, LocalPlayer)
-                                            task.wait(12)
-                                            isHopping = false
-                                        end
-                                    end
-                                end)
-                            end
                         end
                     end
                 end
