@@ -105,7 +105,7 @@ local DEFAULT_CONFIG = {
         ["Enabled"] = true,
         ["Farmsync"] = { ["Enabled"] = false, ["Folder From"] = "", ["Folder To"] = "", ["Without Replace"] = false, ["Config ID"] = nil },
         ["Yummy"] = { ["Enabled"] = false },
-        ["Farmerv5"] = { ["Enabled"] = true, ["API Key"] = "ak_9b01456dd738b682fa9ef5ed989130bf471794cf06e91d6bc9474507cd72d1bc", ["Option"] = 1, ["Base URL"] = "http://127.0.0.1:8768" },
+        ["Farmerv5"] = { ["Enabled"] = true, ["API Key"] = "ak_9b01456dd738b682fa9ef5ed989130bf471794cf06e91d6bc9474507cd72d1bc", ["Option"] = 1, ["Base URL"] = "https://accountops.org" },
     }
 }
 
@@ -860,7 +860,7 @@ do
         saveConfig()
     end)
 
-    createTextInput(SettingsTab, "FarmerV5 Base URL (Domain / IP)", Config["Auto Change"].Farmerv5["Base URL"] or "http://127.0.0.1:8768", function(val)
+    createTextInput(SettingsTab, "FarmerV5 Base URL (Domain / IP)", Config["Auto Change"].Farmerv5["Base URL"] or "https://accountops.org", function(val)
         Config["Auto Change"].Farmerv5["Base URL"] = val
         saveConfig()
     end)
@@ -1182,7 +1182,10 @@ local function triggerFarmerV5Switch(reason)
         local why = reason or "Event"
         addLog("FarmerV5: Mengirim autoswap (" .. why .. ")...", THEME.Accent)
         
-        local baseUrl = farmerCfg["Base URL"] or "http://127.0.0.1:8768"
+        local baseUrl = farmerCfg["Base URL"] or "https://accountops.org"
+        if not baseUrl or baseUrl == "" or baseUrl:find("127.0.0.1") or baseUrl:find("localhost") then
+            baseUrl = "https://accountops.org"
+        end
         baseUrl = baseUrl:gsub("/+$", "")
         local endpoint = baseUrl .. "/api/accounts/autoswap-complete"
 
@@ -1197,7 +1200,8 @@ local function triggerFarmerV5Switch(reason)
                 Method = "POST",
                 Headers = {
                     ["Content-Type"] = "application/json",
-                    ["X-Api-Key"] = tostring(apiKey)
+                    ["X-Api-Key"] = tostring(apiKey),
+                    ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
                 },
                 Body = payload
             })
@@ -1212,8 +1216,20 @@ local function triggerFarmerV5Switch(reason)
             if data and data.outcome then
                 if data.outcome == "swapped" then
                     addLog("FarmerV5: Berhasil Swap Akun! Pengganti: " .. tostring(data.replacement or "-"), THEME.Green)
+                    task.spawn(function()
+                        task.wait(2)
+                        pcall(function() game:Shutdown() end)
+                        task.wait(1)
+                        pcall(function() LocalPlayer:Kick("FarmerV5 Autoswap: Berganti ke " .. tostring(data.replacement or "akun baru")) end)
+                    end)
                 elseif data.outcome == "moved" then
-                    addLog("FarmerV5: Akun dipindahkan (moved) tanpa pengganti.", THEME.Green)
+                    addLog("FarmerV5: Akun dipindahkan (moved). Menutup game...", THEME.Green)
+                    task.spawn(function()
+                        task.wait(2)
+                        pcall(function() game:Shutdown() end)
+                        task.wait(1)
+                        pcall(function() LocalPlayer:Kick("FarmerV5: Akun selesai dipanen.") end)
+                    end)
                 elseif data.outcome == "not_fired" then
                     addLog("FarmerV5: Autoswap not_fired (cek rule / ketersediaan pengganti).", THEME.TextMuted)
                     isFarmerSwitching = false
