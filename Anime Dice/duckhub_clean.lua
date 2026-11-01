@@ -751,6 +751,7 @@ end
 local cachedReceiverUserId = nil
 local cachedReceiverName = nil
 local lastFriendCheckTime = 0
+local lastPresenceLogTime = 0
 
 local function getReceiverGameInstance(receiverName)
     if not receiverName or receiverName == "" then return nil, nil end
@@ -762,6 +763,10 @@ local function getReceiverGameInstance(receiverName)
     if okFriends and type(friends) == "table" then
         for _, f in ipairs(friends) do
             if f.UserName and f.UserName:lower() == receiverName:lower() then
+                if f.VisitorId and not cachedReceiverUserId then
+                    cachedReceiverUserId = f.VisitorId
+                    cachedReceiverName = receiverName
+                end
                 if f.GameId and f.GameId ~= "" then
                     return f.PlaceId or game.PlaceId, f.GameId
                 end
@@ -782,7 +787,7 @@ local function getReceiverGameInstance(receiverName)
 
     -- 3. Coba dari Roblox Presence API (sangat akurat, langsung dapat JobId / GameId)
     if cachedReceiverUserId then
-        local reqFn = (syn and syn.request) or (http and http.request) or http_request or request
+        local reqFn = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
         if reqFn then
             local okReq, res = pcall(function()
                 return reqFn({
@@ -805,7 +810,7 @@ local function getReceiverGameInstance(receiverName)
                     local p = data.userPresences[1]
                     -- userPresenceType: 2 = InGame
                     if p.userPresenceType == 2 and p.gameId and p.gameId ~= "" then
-                        return p.placeId or game.PlaceId, p.gameId
+                        return p.placeId or p.rootPlaceId or game.PlaceId, p.gameId
                     end
                 end
             end
@@ -820,26 +825,29 @@ local function followReceiverFriend()
     local receiverName = Config.Receiver
     if not receiverName or receiverName == "" then return end
 
-    if tick() - lastFriendCheckTime < 6 then return end
+    if tick() - lastFriendCheckTime < 4 then return end
     lastFriendCheckTime = tick()
 
     local targetPlaceId, targetJobId = getReceiverGameInstance(receiverName)
     if targetJobId and targetJobId ~= "" then
         if targetJobId ~= game.JobId then
             isHopping = true
-            addLog(string.format("Menemukan %s di server lain (%s). Mengikuti receiver...", receiverName, string.sub(targetJobId, 1, 8)), THEME.Cyan)
-            task.wait(1.5)
-            local tpOk, tpErr = pcall(function()
-                TeleportService:TeleportToPlaceInstance(targetPlaceId or game.PlaceId, targetJobId, LocalPlayer)
-            end)
-            if not tpOk then
-                addLog("Gagal teleport ke server teman: " .. tostring(tpErr), THEME.Rose)
-                task.wait(6)
+            addLog(string.format("Menemukan %s di server (%s). Melakukan teleport...", receiverName, string.sub(targetJobId, 1, 8)), THEME.Cyan)
+            task.spawn(function()
+                task.wait(1)
+                local tpOk, tpErr = pcall(function()
+                    TeleportService:TeleportToPlaceInstance(targetPlaceId or game.PlaceId, targetJobId, LocalPlayer)
+                end)
+                if not tpOk then
+                    addLog("Gagal teleport: " .. tostring(tpErr), THEME.Rose)
+                end
+                task.wait(10)
                 isHopping = false
-            end
+            end)
         end
     else
-        if tick() % 30 < 6 then
+        if tick() - lastPresenceLogTime >= 15 then
+            lastPresenceLogTime = tick()
             addLog("Mencari server " .. receiverName .. " (Hop Mode: Friend)...", THEME.TextMuted)
         end
     end
@@ -1613,73 +1621,78 @@ end)
 -- Server Hop & Request Engine Loop
 task.spawn(function()
     while task.wait(3) do
-        if not Config.Enabled then continue end
-        local role = getRole()
+        local loopOk, loopErr = pcall(function()
+            if not Config.Enabled then return end
+            local role = getRole()
 
-        if role == "Receiver" then
-            pcall(function()
-                if writefile then
-                    writefile(JOB_FILE, game.JobId)
-                end
-            end)
+            if role == "Receiver" then
+                pcall(function()
+                    if writefile then
+                        writefile(JOB_FILE, game.JobId)
+                    end
+                end)
 
-            if not isHopping and not inTradeSession and Config.Hop and Config.Hop["Receiver Auto Hop If Full"] then
-                local threshold = tonumber(Config.Hop["Max Players Threshold"]) or 8
-                local currentPlayers = #Players:GetPlayers()
-                if currentPlayers >= threshold then
-                    addLog(string.format("Server penuh (%d/%d pemain >= threshold %d). Memulai hop ke server sepi...", currentPlayers, Players.MaxPlayers, threshold), THEME.Accent)
-                    hopToLowestServer()
+                if not isHopping and not inTradeSession and Config.Hop and Config.Hop["Receiver Auto Hop If Full"] then
+                    local threshold = tonumber(Config.Hop["Max Players Threshold"]) or 8
+                    local currentPlayers = #Players:GetPlayers()
+                    if currentPlayers >= threshold then
+                        addLog(string.format("Server penuh (%d/%d pemain >= threshold %d). Memulai hop ke server sepi...", currentPlayers, Players.MaxPlayers, threshold), THEME.Accent)
+                        hopToLowestServer()
+                    end
                 end
-            end
-        else
-            if not inTradeSession and (Config.Settings and Config.Settings["Auto Loop Trade"]) then
-                local recPlayer = Players:FindFirstChild(Config.Receiver)
-                if not recPlayer then
-                    -- Receiver TIDAK ADA di server ini: Prioritaskan mencari dan mengikuti server Receiver!
-                    if not isHopping and Config.Hop and Config.Hop.Enabled then
-                        local hopMode = Config.Hop.Mode or (Config.Hop["Use JobFile"] and "JobFile" or "Friend")
-                        if hopMode == "Friend" then
-                            followReceiverFriend()
-                        elseif hopMode == "JobFile" then
-                            pcall(function()
-                                if isfile and isfile(JOB_FILE) then
-                                    local targetJob = readfile(JOB_FILE):gsub("%s+", "")
-                                    if targetJob ~= "" and targetJob ~= game.JobId then
-                                        isHopping = true
-                                        addLog("Receiver di server lain (" .. string.sub(targetJob, 1, 8) .. "). Mengikuti receiver...", THEME.Cyan)
-                                        task.wait(2)
-                                        TeleportService:TeleportToPlaceInstance(game.PlaceId, targetJob, LocalPlayer)
-                                        task.wait(12)
-                                        isHopping = false
+            else
+                if not inTradeSession and (Config.Settings and Config.Settings["Auto Loop Trade"]) then
+                    local recPlayer = Players:FindFirstChild(Config.Receiver)
+                    if not recPlayer then
+                        -- Receiver TIDAK ADA di server ini: Prioritaskan mencari dan mengikuti server Receiver!
+                        if not isHopping and Config.Hop and Config.Hop.Enabled then
+                            local hopMode = Config.Hop.Mode or (Config.Hop["Use JobFile"] and "JobFile" or "Friend")
+                            if hopMode == "Friend" then
+                                followReceiverFriend()
+                            elseif hopMode == "JobFile" then
+                                pcall(function()
+                                    if isfile and isfile(JOB_FILE) then
+                                        local targetJob = readfile(JOB_FILE):gsub("%s+", "")
+                                        if targetJob ~= "" and targetJob ~= game.JobId then
+                                            isHopping = true
+                                            addLog("Receiver di server lain (" .. string.sub(targetJob, 1, 8) .. "). Mengikuti receiver...", THEME.Cyan)
+                                            task.wait(2)
+                                            TeleportService:TeleportToPlaceInstance(game.PlaceId, targetJob, LocalPlayer)
+                                            task.wait(12)
+                                            isHopping = false
+                                        end
                                     end
-                                end
-                            end)
+                                end)
+                            end
                         end
-                    end
-                else
-                    -- Receiver ADA di server ini: Cek apakah masih ada barang untuk ditrade
-                    local invLoaded = false
-                    pcall(function()
-                        invLoaded = (DataController and DataController.Inventory and DataController.Inventory() ~= nil)
-                    end)
-
-                    if invLoaded and (tick() - scriptStartTime >= 6) and (not hasItemsToSend()) then
-                        if tick() - lastEmptyNoticeTime >= 15 then
-                            lastEmptyNoticeTime = tick()
-                            StatusBadge.Text = role:upper() .. " [KOSONG]"
-                            StatusBadge.TextColor3 = THEME.TextMuted
-                            addLog("Inventaris kosong. Mengirim sinyal ganti akun ke FarmerV5...", THEME.TextMuted)
-                        end
-                        triggerFarmerV5Switch("Inventaris Kosong")
                     else
-                        if tick() - lastRequestTime >= 8 then
-                            lastRequestTime = tick()
-                            addLog("Mengirim trade request ke: " .. Config.Receiver, THEME.TextMuted)
-                            RequestTradeRemote:FireServer(recPlayer)
+                        -- Receiver ADA di server ini: Cek apakah masih ada barang untuk ditrade
+                        local invLoaded = false
+                        pcall(function()
+                            invLoaded = (DataController and DataController.Inventory and DataController.Inventory() ~= nil)
+                        end)
+
+                        if invLoaded and (tick() - scriptStartTime >= 6) and (not hasItemsToSend()) then
+                            if tick() - lastEmptyNoticeTime >= 15 then
+                                lastEmptyNoticeTime = tick()
+                                StatusBadge.Text = role:upper() .. " [KOSONG]"
+                                StatusBadge.TextColor3 = THEME.TextMuted
+                                addLog("Inventaris kosong. Mengirim sinyal ganti akun ke FarmerV5...", THEME.TextMuted)
+                            end
+                            triggerFarmerV5Switch("Inventaris Kosong")
+                        else
+                            if tick() - lastRequestTime >= 8 then
+                                lastRequestTime = tick()
+                                addLog("Mengirim trade request ke: " .. Config.Receiver, THEME.TextMuted)
+                                RequestTradeRemote:FireServer(recPlayer)
+                            end
                         end
                     end
                 end
             end
+        end)
+        if not loopOk then
+            print("[DuckHub Loop Error]:", loopErr)
         end
     end
 end)

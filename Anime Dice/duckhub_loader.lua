@@ -61,9 +61,9 @@ getgenv().TradeConfig = {
     },
     ["Hop"] = {
         ["Enabled"] = true,
-        ["Mode"] = "JobFile",
+        ["Mode"] = "Friend",
         ["Target JobId"] = "",
-        ["Use JobFile"] = true,
+        ["Use JobFile"] = false,
         ["Receiver Auto Hop If Full"] = true,
         ["Max Players Threshold"] = 8,
         ["Publish Interval"] = 5,
