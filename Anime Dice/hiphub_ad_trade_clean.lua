@@ -195,6 +195,10 @@ function Settings.Load()
         end
     end)
 
+    if tostring(Settings.HostUsername or ""):lower() == "itrast11" then
+        Settings.HostUsername = "dimsongkang1"
+    end
+
     detectRole()
     
     
@@ -2380,15 +2384,12 @@ local function isTargetCompleted(username)
     return count >= (tonumber(Settings.UnitsPerPlayer) or 1)
 end
 
-local function getNextEligibleTarget()
-    if Settings.TargetPlayers and #Settings.TargetPlayers > 0 then
-        for _, targetName in ipairs(Settings.TargetPlayers) do
-            if targetName and targetName ~= "" and not isTargetCompleted(targetName) then
-                local targetPlayer = Players:FindFirstChild(targetName)
-                if targetPlayer and targetPlayer ~= localPlayer then
-                    return targetPlayer
-                end
-            end
+local function findHostPlayer()
+    local host = tostring(Settings.HostUsername or ""):lower():gsub("%s+", "")
+    if host == "" then return nil end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Name:lower() == host and p ~= localPlayer then
+            return p
         end
     end
     return nil
@@ -2396,8 +2397,30 @@ end
 
 local function isHostPlayer(playerObj)
     if not playerObj then return false end
-    local host = tostring(Settings.HostUsername or ""):lower()
+    local host = tostring(Settings.HostUsername or ""):lower():gsub("%s+", "")
     return host ~= "" and playerObj.Name:lower() == host
+end
+
+local function getNextEligibleTarget()
+    if Settings.TargetPlayers and #Settings.TargetPlayers > 0 then
+        for _, targetName in ipairs(Settings.TargetPlayers) do
+            if targetName and targetName ~= "" and not isTargetCompleted(targetName) then
+                local lower = targetName:lower():gsub("%s+", "")
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p.Name:lower() == lower and p ~= localPlayer then
+                        return p
+                    end
+                end
+            end
+        end
+    elseif Settings.AcceptAnyRequester then
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= localPlayer and not isTargetCompleted(p.Name) then
+                return p
+            end
+        end
+    end
+    return nil
 end
 
 
@@ -2428,7 +2451,8 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
                 log(string.format("Ignoring request from non-target user %s", sender.Name), UI.Colors.textMuted)
             end
         elseif Settings.Role == "Receiver" then
-            if isHostPlayer(sender) then
+            local isHost = isHostPlayer(sender) or (Settings.AcceptAnyRequester == true)
+            if isHost then
                 if Settings.HasReceived then
                     log("Self already received unit. Declining trade.", UI.Colors.accentOrange)
                     RespondToRequestRemote:FireServer(false)
@@ -2437,7 +2461,7 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
                     RespondToRequestRemote:FireServer(true)
                 end
             else
-                log(string.format("Ignoring request from non-host user %s", sender.Name), UI.Colors.textMuted)
+                log(string.format("Ignoring request from non-host user %s (Configured Host: %s)", sender.Name, tostring(Settings.HostUsername)), UI.Colors.textMuted)
             end
         end
         return
@@ -2694,8 +2718,8 @@ task.spawn(function()
                     return
                 end
                 
-                local hostPlayer = Players:FindFirstChild(Settings.HostUsername)
-                if hostPlayer and hostPlayer ~= localPlayer then
+                local hostPlayer = findHostPlayer()
+                if hostPlayer then
                     lastRequestTime = now
                     log(string.format("Auto-sending trade request to Host: %s", hostPlayer.Name), UI.Colors.accentBlend)
                     RequestTradeRemote:FireServer(hostPlayer)
