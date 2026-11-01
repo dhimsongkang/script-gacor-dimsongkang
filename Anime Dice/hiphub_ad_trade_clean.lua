@@ -1,46 +1,6 @@
-_G.hiphub_key = "HIPHUB-PREMIUM-E370-53A5"
-_G.hiphub_role = "premium"
-_G.hiphub_url = "https://hiphub.cloud"
-_G.hiphub_expires_at = 4939282107
-if getgenv then getgenv().hiphub_key = "HIPHUB-PREMIUM-E370-53A5" end
-if getgenv then getgenv().hiphub_role = "premium" end
-if getgenv then getgenv().hiphub_url = "https://hiphub.cloud" end
-if getgenv then getgenv().hiphub_expires_at = 4939282107 end
-
-if _G.hiphub_expires_at and _G.hiphub_expires_at > 0 then
-    task.spawn(function()
-        while task.wait(30) do
-            if os.time() > _G.hiphub_expires_at then
-                pcall(function()
-                    local coreGui = game:GetService("CoreGui")
-                    local playerGui = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
-                    local function clean(parent)
-                        if not parent then return end
-                        for _, child in ipairs(parent:GetChildren()) do
-                            if child:IsA("ScreenGui") and (string.find(child.Name, "HipHub") or string.find(child.Name, "hiphub")) then
-                                child:Destroy()
-                            end
-                        end
-                    end
-                    if gethui then clean(gethui()) end
-                    clean(coreGui)
-                    clean(playerGui)
-                end)
-                pcall(function()
-                    game:GetService("StarterGui"):SetCore("SendNotification", {
-                        Title = "HipHub",
-                        Text = "Key Expired! Please renew subscription at hiphub.cloud",
-                        Duration = 10
-                    })
-                end)
-                warn("HipHub: Key has expired. Script terminated.")
-                break
-            end
-        end
-    end)
-end
 do
 
+do
 
 local Players = game:GetService("Players")
 local localPlayer = Players.LocalPlayer
@@ -220,6 +180,8 @@ do
 if not game:IsLoaded() then
 	game.Loaded:Wait()
 end
+
+do
 
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -2072,6 +2034,8 @@ do
 
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+do
+
 local Players = game:GetService("Players")
 local localPlayer = Players.LocalPlayer
 
