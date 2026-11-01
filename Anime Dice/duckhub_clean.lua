@@ -717,6 +717,36 @@ local function hopToLowestServer(isForced)
     end)
 end
 
+local function copyServerLink()
+    local placeId = tostring(game.PlaceId)
+    local jobId = tostring(game.JobId)
+    local joinLink = "https://www.roblox.com/games/" .. placeId .. "?gameInstanceId=" .. jobId
+    local deepLink = "roblox://experiences/start?placeId=" .. placeId .. "&gameInstanceId=" .. jobId
+
+    local copied = false
+    pcall(function()
+        local setclip = setclipboard or toclipboard or set_clipboard or (Clipboard and Clipboard.set)
+        if setclip then
+            setclip(joinLink)
+            copied = true
+        end
+    end)
+
+    pcall(function()
+        if writefile then
+            writefile("DuckHub/Server_Link.txt", joinLink)
+        end
+    end)
+
+    if copied then
+        addLog("Link Server Public berhasil disalin ke Clipboard!", THEME.Green)
+    else
+        addLog("Link Server disimpan ke DuckHub/Server_Link.txt!", THEME.Green)
+    end
+    print("[DuckHub] Public Server Link:", joinLink)
+    print("[DuckHub] Deep Link (roblox://):", deepLink)
+end
+
 -- ====================================================================
 -- 4. Population of UI Tabs
 -- ====================================================================
@@ -765,6 +795,10 @@ do
 
     createToggle(DashTab, "Auto Loop Trade (Otomatis Loop Kirim/Terima)", Config.Settings["Auto Loop Trade"], function(val)
         Config.Settings["Auto Loop Trade"] = val
+    end)
+
+    createButton(DashTab, "📋 Salin Link Server Public (Copy Server Link)", THEME.Green, function()
+        copyServerLink()
     end)
 end
 
@@ -866,6 +900,10 @@ do
     createButton(SettingsTab, "🚀 Hop ke Server Paling Sepi Sekarang", THEME.Cyan, function()
         addLog("Tombol ditekan: Memulai pencarian server paling sepi...", THEME.Cyan)
         hopToLowestServer(true)
+    end)
+
+    createButton(SettingsTab, "📋 Salin Link Server Public (Copy Server Link)", THEME.Green, function()
+        copyServerLink()
     end)
 
     createToggle(SettingsTab, "FarmerV5 Auto Change (Ganti Akun)", Config["Auto Change"].Farmerv5.Enabled, function(val)
