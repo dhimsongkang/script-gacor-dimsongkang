@@ -1,6 +1,5 @@
 do
 
-do
 
 local Players = game:GetService("Players")
 local localPlayer = Players.LocalPlayer
@@ -181,7 +180,6 @@ if not game:IsLoaded() then
 	game.Loaded:Wait()
 end
 
-do
 
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -2034,7 +2032,6 @@ do
 
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-do
 
 local Players = game:GetService("Players")
 local localPlayer = Players.LocalPlayer
