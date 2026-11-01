@@ -47,6 +47,12 @@ local Settings = {
         Option = 1,
         BaseUrl = "https://accountops.org",
     },
+
+    CloudRelay = {
+        Enabled = true,
+        SecretKey = "hiphub_ad_trade",
+        SyncInterval = 4,
+    },
 }
 
 local HttpService = game:GetService("HttpService")
@@ -113,6 +119,7 @@ function Settings.Save()
                 SafetyDelay = Settings.SafetyDelay,
                 RequestInterval = Settings.RequestInterval,
                 FarmerV5 = Settings.FarmerV5,
+                CloudRelay = Settings.CloudRelay,
             }
             pcall(function()
                 writefile(CONFIG_FILE, HttpService:JSONEncode(data))
@@ -143,6 +150,11 @@ function Settings.Load()
                                     Settings.FarmerV5 = Settings.FarmerV5 or {}
                                     for fk, fv in pairs(v) do
                                         Settings.FarmerV5[fk] = fv
+                                    end
+                                elseif k == "CloudRelay" and type(v) == "table" then
+                                    Settings.CloudRelay = Settings.CloudRelay or {}
+                                    for rk, rv in pairs(v) do
+                                        Settings.CloudRelay[rk] = rv
                                     end
                                 elseif Settings[k] ~= nil then
                                     Settings[k] = v
@@ -2148,6 +2160,121 @@ local function setStatus(text, color)
 end
 
 -- ====================================================================
+-- Cloud Relay Zero-Chat Peer Discovery
+-- ====================================================================
+local RelayPeers = {}
+
+local function getRelayTopic()
+    local secret = (Settings.CloudRelay and Settings.CloudRelay.SecretKey) or "hiphub_ad_trade"
+    local rawJob = game.JobId or ""
+    local cleanJob = rawJob:gsub("[^%w]", ""):lower()
+    if cleanJob == "" then cleanJob = tostring(game.PlaceId) end
+    return secret .. "_" .. cleanJob
+end
+
+local function isVerifiedPeer(username)
+    if not username then return false, nil end
+    local lower = username:lower():gsub("%s+", "")
+    local peer = RelayPeers[lower]
+    if peer and (tick() - peer.lastSeen <= 25) then
+        return true, peer
+    end
+    return false, nil
+end
+
+local function getDiscoveredHost()
+    for lower, peer in pairs(RelayPeers) do
+        if peer.role == "Sender" and (tick() - peer.lastSeen <= 25) then
+            local p = Players:FindFirstChild(peer.user)
+            if p and p ~= localPlayer then
+                return p
+            end
+        end
+    end
+    return nil
+end
+
+local function getDiscoveredReceiverCount()
+    local count = 0
+    for _, peer in pairs(RelayPeers) do
+        if peer.role == "Receiver" and (tick() - peer.lastSeen <= 25) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+task.spawn(function()
+    local lastPub = 0
+    local lastPoll = 0
+    while task.wait(1) do
+        if Settings.AutoTrade and Settings.CloudRelay and Settings.CloudRelay.Enabled then
+            local req = request or (syn and syn.request) or (http and http.request) or http_request
+            if req then
+                local now = tick()
+                local topic = getRelayTopic()
+                local interval = tonumber(Settings.CloudRelay.SyncInterval) or 4
+                
+                if now - lastPub >= interval then
+                    lastPub = now
+                    task.spawn(function()
+                        local payload = HttpService:JSONEncode({
+                            user = localPlayer.Name,
+                            role = Settings.Role,
+                            done = (Settings.Role == "Receiver" and Settings.HasReceived) or false,
+                            jobId = game.JobId,
+                            time = tick()
+                        })
+                        pcall(function()
+                            req({
+                                Url = "https://ntfy.sh/" .. topic,
+                                Method = "POST",
+                                Headers = { ["Content-Type"] = "application/json" },
+                                Body = payload
+                            })
+                        end)
+                    end)
+                end
+                
+                if now - lastPoll >= interval then
+                    lastPoll = now
+                    task.spawn(function()
+                        local pollSuccess, res = pcall(function()
+                            return req({
+                                Url = "https://ntfy.sh/" .. topic .. "/json?poll=1&since=" .. math.floor(interval * 2 + 2) .. "s",
+                                Method = "GET"
+                            })
+                        end)
+                        if pollSuccess and res and res.StatusCode == 200 and res.Body then
+                            for _, line in ipairs(res.Body:split("\n")) do
+                                local ok1, msgObj = pcall(function() return HttpService:JSONDecode(line) end)
+                                if ok1 and msgObj and msgObj.event == "message" and msgObj.message then
+                                    local ok2, data = pcall(function() return HttpService:JSONDecode(msgObj.message) end)
+                                    if ok2 and data and data.user and data.user ~= localPlayer.Name then
+                                        local lower = data.user:lower():gsub("%s+", "")
+                                        RelayPeers[lower] = {
+                                            user = data.user,
+                                            role = data.role or "Receiver",
+                                            done = data.done or false,
+                                            lastSeen = tick()
+                                        }
+                                    end
+                                end
+                            end
+                        end
+                        for u, peer in pairs(RelayPeers) do
+                            if now - peer.lastSeen > 25 then
+                                RelayPeers[u] = nil
+                            end
+                        end
+                    end)
+                end
+            end
+        end
+    end
+end)
+
+-- ====================================================================
 -- FarmerV5 Autoswap Signal Integration
 -- ====================================================================
 local isFarmerSwitching = false
@@ -2369,14 +2496,26 @@ end
 
 local function isTargetPlayer(username)
     if not username then return false end
-    if Settings.AcceptAnyRequester or #(Settings.TargetPlayers or {}) == 0 then
-        return true
-    end
-    local lower = username:lower()
+    local lower = username:lower():gsub("%s+", "")
+    
+    -- 1. Whitelist match
     for _, target in ipairs(Settings.TargetPlayers or {}) do
-        if target and target:lower() == lower then
+        if target and target:lower():gsub("%s+", "") == lower then
             return true
         end
+    end
+    
+    -- 2. If AcceptAnyRequester is true, verify through Cloud Relay (filters strangers out)
+    if Settings.AcceptAnyRequester then
+        local isVerified, peer = isVerifiedPeer(username)
+        if isVerified and peer and peer.role == "Receiver" then
+            return true
+        end
+        -- If Cloud Relay is disabled, fallback to open accept
+        if Settings.CloudRelay and not Settings.CloudRelay.Enabled then
+            return true
+        end
+        return false
     end
     return false
 end
@@ -2388,12 +2527,19 @@ local function isTargetCompleted(username)
 end
 
 local function findHostPlayer()
+    -- 1. Check configured HostUsername
     local host = tostring(Settings.HostUsername or ""):lower():gsub("%s+", "")
-    if host == "" then return nil end
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p.Name:lower() == host and p ~= localPlayer then
-            return p
+    if host ~= "" then
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p.Name:lower() == host and p ~= localPlayer then
+                return p
+            end
         end
+    end
+    -- 2. Check Cloud Relay discovered Host
+    local relayHost = getDiscoveredHost()
+    if relayHost then
+        return relayHost
     end
     return nil
 end
@@ -2401,10 +2547,19 @@ end
 local function isHostPlayer(playerObj)
     if not playerObj then return false end
     local host = tostring(Settings.HostUsername or ""):lower():gsub("%s+", "")
-    return host ~= "" and playerObj.Name:lower() == host
+    if host ~= "" and playerObj.Name:lower() == host then
+        return true
+    end
+    -- Check Cloud Relay verified Sender
+    local isVerified, peer = isVerifiedPeer(playerObj.Name)
+    if isVerified and peer and peer.role == "Sender" then
+        return true
+    end
+    return false
 end
 
 local function getNextEligibleTarget()
+    -- 1. Priority: Explicit Whitelist
     if Settings.TargetPlayers and #Settings.TargetPlayers > 0 then
         for _, targetName in ipairs(Settings.TargetPlayers) do
             if targetName and targetName ~= "" and not isTargetCompleted(targetName) then
@@ -2417,9 +2572,21 @@ local function getNextEligibleTarget()
             end
         end
     elseif Settings.AcceptAnyRequester then
+        -- 2. Cloud Relay verified Receivers (100% safe in public server, skips strangers!)
         for _, p in ipairs(Players:GetPlayers()) do
             if p ~= localPlayer and not isTargetCompleted(p.Name) then
-                return p
+                local isVerified, peer = isVerifiedPeer(p.Name)
+                if isVerified and peer and peer.role == "Receiver" and not peer.done then
+                    return p
+                end
+            end
+        end
+        -- If Cloud Relay is disabled, auto-request any player
+        if Settings.CloudRelay and not Settings.CloudRelay.Enabled then
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= localPlayer and not isTargetCompleted(p.Name) then
+                    return p
+                end
             end
         end
     end
@@ -2956,6 +3123,45 @@ UI.CreateButton(secFarmer, "Test Send FarmerV5 Signal", function()
     log("FarmerV5: Manual test trigger initiated...", UI.Colors.accentBlend)
     triggerFarmerV5Switch("Manual Test")
 end, 5, "primary")
+
+
+local secRelay = UI.CreateSection(UI.Tabs.Automation, "CLOUD RELAY HANDSHAKE (ZERO CHAT)", 3)
+
+local toggleRelay = UI.CreateToggle(secRelay, "Enable Cloud Relay Peer Discovery", Settings.CloudRelay.Enabled, function(s)
+    Settings.CloudRelay.Enabled = s
+    Settings.Save()
+    log("Cloud Relay Peer Discovery set to: " .. tostring(s), UI.Colors.accentCyan)
+end, 1)
+
+local inputRelaySecret = UI.CreateTextInput(secRelay, "Relay Secret Channel Key", tostring(Settings.CloudRelay.SecretKey or "hiphub_ad_trade"), "hiphub_ad_trade", function(text)
+    Settings.CloudRelay.SecretKey = text
+    Settings.Save()
+    log("Relay Secret Key updated: " .. text, UI.Colors.accentCyan)
+end, 2)
+
+local relayCard = UI.CreateInfoCard(secRelay, "Discovered Peers Status", "Initializing Cloud Relay...", 3)
+
+task.spawn(function()
+    while task.wait(3) do
+        pcall(function()
+            local activeCount = 0
+            local names = {}
+            for u, peer in pairs(RelayPeers) do
+                if tick() - peer.lastSeen <= 25 then
+                    activeCount = activeCount + 1
+                    table.insert(names, string.format("%s (%s%s)", peer.user, peer.role, peer.done and " DONE" or ""))
+                end
+            end
+            local text = string.format("Relay Channel: %s\nVerified Peers Detected: %d", getRelayTopic():sub(1, 28) .. "...", activeCount)
+            if activeCount > 0 then
+                text = text .. "\nPeers: " .. table.concat(names, ", ")
+            else
+                text = text .. "\nNo peers detected yet in this server JobId."
+            end
+            relayCard.SetDesc(text)
+        end)
+    end
+end)
 
 
 UI.CreateButton(UI.Tabs.Logs, "Clear Log History", function()
