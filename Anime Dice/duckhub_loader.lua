@@ -60,14 +60,14 @@ getgenv().TradeConfig = {
         ["Ready Wait Time"] = 1.0,
     },
     ["Hop"] = {
-        ["Enabled"] = false,
+        ["Enabled"] = true,
         ["Mode"] = "JobFile",
         ["Target JobId"] = "",
         ["Use JobFile"] = true,
         ["Receiver Auto Hop If Full"] = true,
         ["Max Players Threshold"] = 8,
         ["Publish Interval"] = 5,
-        ["Hop Delay"] = 8,
+        ["Hop Delay"] = 5,
         ["Max Hops"] = 20,
     },
     ["Auto Sell"] = {

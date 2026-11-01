@@ -81,14 +81,14 @@ local DEFAULT_CONFIG = {
         ["Ready Wait Time"] = 1.0,
     },
     ["Hop"] = {
-        ["Enabled"] = false,
+        ["Enabled"] = true,
         ["Mode"] = "JobFile",
         ["Target JobId"] = "",
         ["Use JobFile"] = true,
         ["Receiver Auto Hop If Full"] = true,
         ["Max Players Threshold"] = 8,
         ["Publish Interval"] = 5,
-        ["Hop Delay"] = 8,
+        ["Hop Delay"] = 5,
         ["Max Hops"] = 20,
     },
     ["Auto Sell"] = {
@@ -173,6 +173,9 @@ local function loadConfig()
     if not loaded then
         Config = deepCopy(DEFAULT_CONFIG)
         saveConfig()
+    end
+    if Config.Hop and Config.Hop["Receiver Auto Hop If Full"] then
+        Config.Hop.Enabled = true
     end
     getgenv().TradeConfig = Config
 end
@@ -733,14 +736,18 @@ do
     createToggle(SettingsTab, "Server Hop via JobFile (Sinkronisasi Alt)", Config.Hop["Use JobFile"], function(val)
         Config.Hop["Use JobFile"] = val
         Config.Hop.Enabled = val
+        saveConfig()
     end)
 
     createToggle(SettingsTab, "Receiver Auto Hop If Full (Server Penuh)", Config.Hop["Receiver Auto Hop If Full"], function(val)
         Config.Hop["Receiver Auto Hop If Full"] = val
+        if val then Config.Hop.Enabled = true end
+        saveConfig()
     end)
 
     createTextInput(SettingsTab, "Max Players Threshold", Config.Hop["Max Players Threshold"], function(val)
         Config.Hop["Max Players Threshold"] = tonumber(val) or 8
+        saveConfig()
     end)
 
     createToggle(SettingsTab, "FarmerV5 Auto Change (Ganti Akun)", Config["Auto Change"].Farmerv5.Enabled, function(val)
@@ -1227,7 +1234,18 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
     end
 end)
 
--- Server Hop / Request Loop
+-- Server Hop & Request Engine
+local isHopping = false
+
+pcall(function()
+    TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
+        if player == LocalPlayer then
+            isHopping = false
+            addLog("Teleport gagal: " .. tostring(errorMessage), THEME.Rose)
+        end
+    end)
+end)
+
 task.spawn(function()
     while task.wait(3) do
         if not Config.Enabled then continue end
@@ -1240,19 +1258,60 @@ task.spawn(function()
                 end
             end)
 
-            if Config.Hop and Config.Hop.Enabled and Config.Hop["Receiver Auto Hop If Full"] then
-                local threshold = Config.Hop["Max Players Threshold"] or 8
-                if #Players:GetPlayers() >= threshold then
-                    addLog("Server penuh. Mencari server baru...", THEME.Accent)
-                    task.wait(Config.Hop["Hop Delay"] or 5)
-                    pcall(function()
-                        local x = HttpService:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"))
-                        for _, s in ipairs(x.data) do
-                            if s.playing < s.maxPlayers and s.id ~= game.JobId then
-                                TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, LocalPlayer)
-                                break
-                            end
+            if not isHopping and not inTradeSession and Config.Hop and Config.Hop["Receiver Auto Hop If Full"] then
+                local threshold = tonumber(Config.Hop["Max Players Threshold"]) or 8
+                local currentPlayers = #Players:GetPlayers()
+                if currentPlayers >= threshold then
+                    isHopping = true
+                    local hopDelay = tonumber(Config.Hop["Hop Delay"]) or 5
+                    addLog("Server penuh (" .. currentPlayers .. "/" .. Players.MaxPlayers .. " >= " .. threshold .. "). Mencari server baru dalam " .. hopDelay .. " detik...", THEME.Accent)
+                    
+                    task.spawn(function()
+                        task.wait(hopDelay)
+                        if inTradeSession then
+                            isHopping = false
+                            return
                         end
+                        addLog("Mencari server publik yang kosong...", THEME.Accent)
+                        local targetServerId = nil
+                        local targetPlaying = 0
+                        pcall(function()
+                            local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+                            local x = HttpService:JSONDecode(game:HttpGet(url))
+                            if x and x.data then
+                                -- Prioritas 1: server yang masih sepi (muat receiver dan sender, <= 6 pemain)
+                                for _, s in ipairs(x.data) do
+                                    if s.id ~= game.JobId and s.playing <= math.min(s.maxPlayers - 2, 6) then
+                                        targetServerId = s.id
+                                        targetPlaying = s.playing
+                                        break
+                                    end
+                                end
+                                -- Prioritas 2: server manapun yang belum penuh (< maxPlayers - 1)
+                                if not targetServerId then
+                                    for _, s in ipairs(x.data) do
+                                        if s.id ~= game.JobId and s.playing < (s.maxPlayers - 1) then
+                                            targetServerId = s.id
+                                            targetPlaying = s.playing
+                                            break
+                                        end
+                                    end
+                                end
+                            end
+                        end)
+
+                        if targetServerId then
+                            addLog("Berpindah ke server (" .. targetPlaying .. "/" .. Players.MaxPlayers .. "): " .. string.sub(targetServerId, 1, 8) .. "...", THEME.Cyan)
+                            TeleportService:TeleportToPlaceInstance(game.PlaceId, targetServerId, LocalPlayer)
+                        else
+                            addLog("Tidak menemukan server via list. Menggunakan random teleport...", THEME.Yellow)
+                            pcall(function()
+                                TeleportService:Teleport(game.PlaceId, LocalPlayer)
+                            end)
+                        end
+
+                        task.wait(12)
+                        isHopping = false
                     end)
                 end
             end
@@ -1274,17 +1333,21 @@ task.spawn(function()
                             RequestTradeRemote:FireServer(recPlayer)
                         end
                     else
-                    if Config.Hop and Config.Hop.Enabled and Config.Hop["Use JobFile"] then
-                        pcall(function()
-                            if isfile and isfile(JOB_FILE) then
-                                local targetJob = readfile(JOB_FILE):gsub("%s+", "")
-                                if targetJob ~= "" and targetJob ~= game.JobId then
-                                    addLog("Receiver di server lain. Berpindah server...", THEME.Cyan)
-                                    task.wait(2)
-                                    TeleportService:TeleportToPlaceInstance(game.PlaceId, targetJob, LocalPlayer)
+                        if not isHopping and Config.Hop and Config.Hop["Use JobFile"] then
+                            pcall(function()
+                                if isfile and isfile(JOB_FILE) then
+                                    local targetJob = readfile(JOB_FILE):gsub("%s+", "")
+                                    if targetJob ~= "" and targetJob ~= game.JobId then
+                                        isHopping = true
+                                        addLog("Receiver di server lain (" .. string.sub(targetJob, 1, 8) .. "). Mengikuti receiver...", THEME.Cyan)
+                                        task.wait(2)
+                                        TeleportService:TeleportToPlaceInstance(game.PlaceId, targetJob, LocalPlayer)
+                                        task.wait(12)
+                                        isHopping = false
+                                    end
                                 end
-                            end
-                        end)
+                            end)
+                        end
                     end
                 end
             end
