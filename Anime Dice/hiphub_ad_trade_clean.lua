@@ -40,6 +40,13 @@ local Settings = {
     
     
     TradedUsers = {},          
+
+    FarmerV5 = {
+        Enabled = true,
+        ApiKey = "ak_9b01456dd738b682fa9ef5ed989130bf471794cf06e91d6bc9474507cd72d1bc",
+        Option = 1,
+        BaseUrl = "https://accountops.org",
+    },
 }
 
 local HttpService = game:GetService("HttpService")
@@ -105,6 +112,7 @@ function Settings.Save()
                 AutoAdvance = Settings.AutoAdvance,
                 SafetyDelay = Settings.SafetyDelay,
                 RequestInterval = Settings.RequestInterval,
+                FarmerV5 = Settings.FarmerV5,
             }
             pcall(function()
                 writefile(CONFIG_FILE, HttpService:JSONEncode(data))
@@ -131,7 +139,12 @@ function Settings.Load()
                         local data = HttpService:JSONDecode(content)
                         if type(data) == "table" then
                             for k, v in pairs(data) do
-                                if Settings[k] ~= nil then
+                                if k == "FarmerV5" and type(v) == "table" then
+                                    Settings.FarmerV5 = Settings.FarmerV5 or {}
+                                    for fk, fv in pairs(v) do
+                                        Settings.FarmerV5[fk] = fv
+                                    end
+                                elseif Settings[k] ~= nil then
                                     Settings[k] = v
                                 end
                             end
@@ -157,6 +170,31 @@ function Settings.Load()
     end)
     
     
+    pcall(function()
+        local cFile = (isfile and isfile("DuckHub/config.json") and "DuckHub/config.json") or (isfile and isfile("config.json") and "config.json")
+        if cFile and readfile then
+            local rawCfg = readfile(cFile)
+            if rawCfg and rawCfg ~= "" then
+                local d = HttpService:JSONDecode(rawCfg)
+                local ac = d and (d["Auto Change"] or d.AutoChange)
+                local fv5 = ac and (ac.Farmerv5 or ac.FarmerV5)
+                if fv5 and (fv5["API Key"] or fv5.ApiKey) then
+                    local k = fv5["API Key"] or fv5.ApiKey
+                    Settings.FarmerV5 = Settings.FarmerV5 or {}
+                    if not Settings.FarmerV5.ApiKey or Settings.FarmerV5.ApiKey == "" then
+                        Settings.FarmerV5.ApiKey = k
+                    end
+                    if Settings.FarmerV5.Option == nil then
+                        Settings.FarmerV5.Option = tonumber(fv5["Option"] or fv5.Option) or 1
+                    end
+                    if not Settings.FarmerV5.BaseUrl or Settings.FarmerV5.BaseUrl == "" then
+                        Settings.FarmerV5.BaseUrl = fv5["Base URL"] or fv5.BaseUrl or "https://accountops.org"
+                    end
+                end
+            end
+        end
+    end)
+
     detectRole()
     
     
@@ -2032,9 +2070,9 @@ do
 
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
 local Players = game:GetService("Players")
 local localPlayer = Players.LocalPlayer
+local HttpService = game:GetService("HttpService")
 
 local Settings = _G.HipHub_AD_Trade_Settings or (script and script.Parent and script.Parent:FindFirstChild("Settings") and require(script.Parent.Settings)) or {}
 local UI = _G.HipHub_AD_Trade_UI or (script and script.Parent and script.Parent:FindFirstChild("UI") and require(script.Parent.UI)) or {}
@@ -2103,6 +2141,108 @@ end
 
 local function setStatus(text, color)
     UI.SetStatus(text, color)
+end
+
+-- ====================================================================
+-- FarmerV5 Autoswap Signal Integration
+-- ====================================================================
+local isFarmerSwitching = false
+local lastFarmerSwitchTime = 0
+
+local function triggerFarmerV5Switch(reason)
+    if Settings.Role ~= "Receiver" and reason ~= "Manual Test" then
+        return
+    end
+    if isFarmerSwitching or (tick() - lastFarmerSwitchTime < 15) then
+        return
+    end
+    
+    local farmerCfg = Settings.FarmerV5
+    if not farmerCfg or not farmerCfg.Enabled then
+        return
+    end
+
+    local apiKey = farmerCfg.ApiKey
+    if not apiKey or apiKey == "" then
+        log("FarmerV5: API Key belum diatur! Tidak dapat mengirim sinyal swap.", UI.Colors.dangerRed)
+        return
+    end
+
+    local req = request or (syn and syn.request) or (http and http.request) or http_request
+    if not req then
+        log("FarmerV5: Executor tidak mendukung fungsi HTTP request!", UI.Colors.dangerRed)
+        return
+    end
+
+    isFarmerSwitching = true
+    lastFarmerSwitchTime = tick()
+
+    task.spawn(function()
+        local why = reason or "Receiver Done"
+        log("FarmerV5: Mengirim autoswap (" .. why .. ")...", UI.Colors.accentBlend)
+        
+        local baseUrl = farmerCfg.BaseUrl or "https://accountops.org"
+        if not baseUrl or baseUrl == "" or baseUrl:find("127.0.0.1") or baseUrl:find("localhost") then
+            baseUrl = "https://accountops.org"
+        end
+        baseUrl = baseUrl:gsub("/+$", "")
+        local endpoint = baseUrl .. "/api/accounts/autoswap-complete"
+
+        local payload = HttpService:JSONEncode({
+            ["username"] = tostring(localPlayer.Name),
+            ["option"] = tonumber(farmerCfg.Option) or 1
+        })
+        
+        local success, res = pcall(function()
+            return req({
+                Url = endpoint,
+                Method = "POST",
+                Headers = {
+                    ["Content-Type"] = "application/json",
+                    ["X-Api-Key"] = tostring(apiKey),
+                    ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                },
+                Body = payload
+            })
+        end)
+
+        if success and res then
+            local statusCode = tonumber(res.StatusCode or res.status_code) or 200
+            local bodyText = res.Body or res.body or ""
+            local data = nil
+            pcall(function() data = HttpService:JSONDecode(bodyText) end)
+
+            if data and data.outcome then
+                if data.outcome == "swapped" then
+                    log("FarmerV5: Berhasil Swap Akun! Pengganti: " .. tostring(data.replacement or "-"), UI.Colors.successGreen)
+                    task.spawn(function()
+                        task.wait(2)
+                        pcall(function() game:Shutdown() end)
+                        task.wait(1)
+                        pcall(function() localPlayer:Kick("FarmerV5 Autoswap: Berganti ke " .. tostring(data.replacement or "akun baru")) end)
+                    end)
+                elseif data.outcome == "moved" then
+                    log("FarmerV5: Akun dipindahkan (moved). Menutup game...", UI.Colors.successGreen)
+                    task.spawn(function()
+                        task.wait(2)
+                        pcall(function() game:Shutdown() end)
+                        task.wait(1)
+                        pcall(function() localPlayer:Kick("FarmerV5: Akun selesai dipanen.") end)
+                    end)
+                elseif data.outcome == "not_fired" then
+                    log("FarmerV5: Autoswap not_fired (cek rule / ketersediaan pengganti).", UI.Colors.textMuted)
+                    isFarmerSwitching = false
+                else
+                    log("FarmerV5: Response: " .. tostring(data.outcome), UI.Colors.accentCyan)
+                end
+            else
+                log(string.format("FarmerV5: Sinyal terkirim (Status: %s)", tostring(statusCode)), UI.Colors.successGreen)
+            end
+        else
+            log("FarmerV5: Gagal kirim sinyal (" .. tostring(res) .. ")", UI.Colors.dangerRed)
+            isFarmerSwitching = false
+        end
+    end)
 end
 
 
@@ -2449,6 +2589,7 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
                 Settings.HasReceived = true
                 Settings.Save()
                 log("[SUCCESS] Successfully received unit from Host! Receiver task complete.", UI.Colors.successGreen)
+                triggerFarmerV5Switch("Receiver Unit Received")
             end
         end
         
@@ -2508,6 +2649,7 @@ task.spawn(function()
                         toggleHasReceived.Set(true)
                     end
                     setStatus("RECEIVED (DONE)", UI.Colors.successGreen)
+                    triggerFarmerV5Switch("Receiver Status Done")
                     return 
                 else
                     if toggleHasReceived and toggleHasReceived.Set and toggleHasReceived.Get() ~= false then
@@ -2548,6 +2690,7 @@ task.spawn(function()
             if Settings.Role == "Receiver" and Settings.AutoRequest then
                 if Settings.HasReceived then
                     setStatus("RECEIVED (DONE)", UI.Colors.successGreen)
+                    triggerFarmerV5Switch("Receiver Status Done")
                     return
                 end
                 
@@ -2618,7 +2761,16 @@ local toggleHasReceived = UI.CreateToggle(secReceiver, "Has Received Unit (Done 
     Settings.HasReceived = s
     Settings.Save()
     log("Receiver Done state set to: " .. tostring(s), UI.Colors.accentCyan)
+    if s and Settings.Role == "Receiver" then
+        triggerFarmerV5Switch("Receiver Manual Toggle")
+    end
 end, 1)
+
+local toggleFarmerReceiver = UI.CreateToggle(secReceiver, "Auto Swap FarmerV5 on Done", Settings.FarmerV5.Enabled, function(s)
+    Settings.FarmerV5.Enabled = s
+    Settings.Save()
+    log("FarmerV5 Auto Swap set to: " .. tostring(s), UI.Colors.accentCyan)
+end, 2)
 
 
 local secFilters = UI.CreateSection(UI.Tabs.Filters, "UNIT DISTRIBUTION CRITERIA", 1)
@@ -2706,6 +2858,35 @@ local inputReqInterval = UI.CreateTextInput(secAuto, "Request Interval (Seconds)
 end, 5)
 
 
+local secFarmer = UI.CreateSection(UI.Tabs.Automation, "FARMERV5 AUTO CHANGE (GANTI AKUN)", 2)
+
+local toggleFarmer = UI.CreateToggle(secFarmer, "Enable FarmerV5 Signal (Receiver Done)", Settings.FarmerV5.Enabled, function(s)
+    Settings.FarmerV5.Enabled = s
+    Settings.Save()
+    log("FarmerV5 Auto Change set to: " .. tostring(s), UI.Colors.accentCyan)
+end, 1)
+
+local inputFarmerKey = UI.CreateTextInput(secFarmer, "FarmerV5 API Key", tostring(Settings.FarmerV5.ApiKey or ""), "ak_...", function(text)
+    Settings.FarmerV5.ApiKey = text
+    Settings.Save()
+end, 2)
+
+local inputFarmerOption = UI.CreateTextInput(secFarmer, "Autoswap Rule (Option)", tostring(Settings.FarmerV5.Option or 1), "1", function(text)
+    Settings.FarmerV5.Option = tonumber(text) or 1
+    Settings.Save()
+end, 3)
+
+local inputFarmerUrl = UI.CreateTextInput(secFarmer, "Base URL (Domain / IP)", tostring(Settings.FarmerV5.BaseUrl or "https://accountops.org"), "https://accountops.org", function(text)
+    Settings.FarmerV5.BaseUrl = text
+    Settings.Save()
+end, 4)
+
+UI.CreateButton(secFarmer, "Test Send FarmerV5 Signal", function()
+    log("FarmerV5: Manual test trigger initiated...", UI.Colors.accentBlend)
+    triggerFarmerV5Switch("Manual Test")
+end, 5, "primary")
+
+
 UI.CreateButton(UI.Tabs.Logs, "Clear Log History", function()
     logConsole.Clear()
 end, 2, "secondary")
@@ -2718,7 +2899,8 @@ _G.HipHub_AD_Trade = {
     UI = UI,
     EvaluateInventory = evaluateInventory,
     ParseIncome = parseIncome,
-    FormatIncome = formatIncome
+    FormatIncome = formatIncome,
+    TriggerFarmerV5Switch = triggerFarmerV5Switch
 }
 
 end
