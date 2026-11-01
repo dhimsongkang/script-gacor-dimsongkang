@@ -76,6 +76,7 @@ local DEFAULT_CONFIG = {
     },
     ["Settings"] = {
         ["Auto Loop Trade"] = true,
+        ["Stop When Empty"] = true,
         ["Offer Delay"] = 0.3,
         ["Ready Wait Time"] = 1.0,
     },
@@ -717,6 +718,10 @@ end
 
 -- 4.4 Settings & Hop Tab
 do
+    createToggle(SettingsTab, "Stop Trade Saat Kosong (Hentikan Jika Habis)", Config.Settings["Stop When Empty"], function(val)
+        Config.Settings["Stop When Empty"] = val
+    end)
+
     createTextInput(SettingsTab, "Offer Delay (detik per unit)", Config.Settings["Offer Delay"], function(val)
         Config.Settings["Offer Delay"] = tonumber(val) or 0.3
     end)
@@ -849,6 +854,7 @@ local activeTradeData = nil
 local isProcessingOffer = false
 local isAdvancing = false
 local lastRequestTime = 0
+local lastEmptyNoticeTime = 0
 
 local function getEquippedUUIDs()
     local equipped = {}
@@ -1008,6 +1014,19 @@ local function getEligibleBoosts()
     return eligibleBoosts
 end
 
+local function hasItemsToSend()
+    local units = getEligibleUnits()
+    if #units > 0 then return true end
+
+    local tokens = getEligibleTokens()
+    if #tokens > 0 then return true end
+
+    local boosts = getEligibleBoosts()
+    if #boosts > 0 then return true end
+
+    return false
+end
+
 local function isAllowedSender(senderName)
     if Config["Accept Any Sender"] then return true end
     local sName = senderName:lower()
@@ -1038,8 +1057,13 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
             end
         else
             if sender.Name:lower() == (Config.Receiver or ""):lower() then
-                addLog("Menerima trade request dari Receiver: " .. sender.Name, THEME.Green)
-                RespondToRequestRemote:FireServer(true)
+                if Config.Settings and Config.Settings["Stop When Empty"] and not hasItemsToSend() then
+                    addLog("Menolak trade dari Receiver (inventaris kosong).", THEME.TextMuted)
+                    RespondToRequestRemote:FireServer(false)
+                else
+                    addLog("Menerima trade request dari Receiver: " .. sender.Name, THEME.Green)
+                    RespondToRequestRemote:FireServer(true)
+                end
             end
         end
         return
@@ -1234,14 +1258,22 @@ task.spawn(function()
             end
         else
             if not inTradeSession and (Config.Settings and Config.Settings["Auto Loop Trade"]) then
-                local recPlayer = Players:FindFirstChild(Config.Receiver)
-                if recPlayer then
-                    if tick() - lastRequestTime >= 8 then
-                        lastRequestTime = tick()
-                        addLog("Mengirim trade request ke: " .. Config.Receiver, THEME.TextMuted)
-                        RequestTradeRemote:FireServer(recPlayer)
+                if Config.Settings and Config.Settings["Stop When Empty"] and not hasItemsToSend() then
+                    if tick() - lastEmptyNoticeTime >= 15 then
+                        lastEmptyNoticeTime = tick()
+                        StatusBadge.Text = role:upper() .. " [KOSONG]"
+                        StatusBadge.TextColor3 = THEME.TextMuted
+                        addLog("Inventaris kosong (tidak ada unit/token filter tersisa). Menunggu item baru...", THEME.TextMuted)
                     end
                 else
+                    local recPlayer = Players:FindFirstChild(Config.Receiver)
+                    if recPlayer then
+                        if tick() - lastRequestTime >= 8 then
+                            lastRequestTime = tick()
+                            addLog("Mengirim trade request ke: " .. Config.Receiver, THEME.TextMuted)
+                            RequestTradeRemote:FireServer(recPlayer)
+                        end
+                    else
                     if Config.Hop and Config.Hop.Enabled and Config.Hop["Use JobFile"] then
                         pcall(function()
                             if isfile and isfile(JOB_FILE) then

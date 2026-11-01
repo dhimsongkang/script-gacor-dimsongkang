@@ -55,6 +55,7 @@ getgenv().TradeConfig = {
     },
     ["Settings"] = {
         ["Auto Loop Trade"] = true,
+        ["Stop When Empty"] = true,
         ["Offer Delay"] = 0.3,
         ["Ready Wait Time"] = 1.0,
     },
