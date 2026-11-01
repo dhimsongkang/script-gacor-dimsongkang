@@ -1475,12 +1475,7 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
         StatusBadge.Text = role:upper() .. " [IDLE]"
         StatusBadge.TextColor3 = THEME.Cyan
 
-        if role == "Sender" then
-            task.spawn(function()
-                task.wait(2)
-                triggerFarmerV5Switch("Trade Selesai")
-            end)
-        elseif role == "Receiver" then
+        if role == "Receiver" then
             if Config.Hop and Config.Hop["Receiver Auto Hop If Full"] then
                 local threshold = tonumber(Config.Hop["Max Players Threshold"]) or 8
                 local currentPlayers = #Players:GetPlayers()
