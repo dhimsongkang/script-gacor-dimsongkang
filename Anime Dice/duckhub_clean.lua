@@ -82,9 +82,9 @@ local DEFAULT_CONFIG = {
     },
     ["Hop"] = {
         ["Enabled"] = true,
-        ["Mode"] = "JobFile",
+        ["Mode"] = "Friend",
         ["Target JobId"] = "",
-        ["Use JobFile"] = true,
+        ["Use JobFile"] = false,
         ["Receiver Auto Hop If Full"] = true,
         ["Max Players Threshold"] = 8,
         ["Publish Interval"] = 5,
@@ -747,6 +747,104 @@ local function copyServerLink()
     print("[DuckHub] Deep Link (roblox://):", deepLink)
 end
 
+-- Receiver Friend Detection Engine
+local cachedReceiverUserId = nil
+local cachedReceiverName = nil
+local lastFriendCheckTime = 0
+
+local function getReceiverGameInstance(receiverName)
+    if not receiverName or receiverName == "" then return nil, nil end
+
+    -- 1. Coba dari GetFriendsOnline terlebih dahulu
+    local okFriends, friends = pcall(function()
+        return LocalPlayer:GetFriendsOnline(200)
+    end)
+    if okFriends and type(friends) == "table" then
+        for _, f in ipairs(friends) do
+            if f.UserName and f.UserName:lower() == receiverName:lower() then
+                if f.GameId and f.GameId ~= "" then
+                    return f.PlaceId or game.PlaceId, f.GameId
+                end
+            end
+        end
+    end
+
+    -- 2. Dapatkan UserId jika belum dicache
+    if not cachedReceiverUserId or cachedReceiverName ~= receiverName then
+        local okUid, uid = pcall(function()
+            return Players:GetUserIdFromNameAsync(receiverName)
+        end)
+        if okUid and uid then
+            cachedReceiverUserId = uid
+            cachedReceiverName = receiverName
+        end
+    end
+
+    -- 3. Coba dari Roblox Presence API (sangat akurat, langsung dapat JobId / GameId)
+    if cachedReceiverUserId then
+        local reqFn = (syn and syn.request) or (http and http.request) or http_request or request
+        if reqFn then
+            local okReq, res = pcall(function()
+                return reqFn({
+                    Url = "https://presence.roblox.com/v1/presence/users",
+                    Method = "POST",
+                    Headers = {
+                        ["Content-Type"] = "application/json"
+                    },
+                    Body = HttpService:JSONEncode({
+                        userIds = { cachedReceiverUserId }
+                    })
+                })
+            end)
+
+            if okReq and res and (res.StatusCode == 200 or res.Status == 200) then
+                local decodeOk, data = pcall(function()
+                    return HttpService:JSONDecode(res.Body)
+                end)
+                if decodeOk and data and data.userPresences and data.userPresences[1] then
+                    local p = data.userPresences[1]
+                    -- userPresenceType: 2 = InGame
+                    if p.userPresenceType == 2 and p.gameId and p.gameId ~= "" then
+                        return p.placeId or game.PlaceId, p.gameId
+                    end
+                end
+            end
+        end
+    end
+
+    return nil, nil
+end
+
+local function followReceiverFriend()
+    if isHopping then return end
+    local receiverName = Config.Receiver
+    if not receiverName or receiverName == "" then return end
+
+    if tick() - lastFriendCheckTime < 6 then return end
+    lastFriendCheckTime = tick()
+
+    local targetPlaceId, targetJobId = getReceiverGameInstance(receiverName)
+    if targetJobId and targetJobId ~= "" then
+        if targetJobId ~= game.JobId then
+            isHopping = true
+            addLog(string.format("Menemukan %s di server lain (%s). Mengikuti receiver...", receiverName, string.sub(targetJobId, 1, 8)), THEME.Cyan)
+            task.wait(1.5)
+            local tpOk, tpErr = pcall(function()
+                TeleportService:TeleportToPlaceInstance(targetPlaceId or game.PlaceId, targetJobId, LocalPlayer)
+            end)
+            if not tpOk then
+                addLog("Gagal teleport ke server teman: " .. tostring(tpErr), THEME.Rose)
+                task.wait(6)
+                isHopping = false
+            end
+        end
+    else
+        if tick() % 30 < 6 then
+            addLog("Mencari server " .. receiverName .. " (Hop Mode: Friend)...", THEME.TextMuted)
+        end
+    end
+end
+
 -- ====================================================================
 -- 4. Population of UI Tabs
 -- ====================================================================
@@ -880,9 +978,27 @@ do
         Config.Settings["Ready Wait Time"] = tonumber(val) or 1.0
     end)
 
-    createToggle(SettingsTab, "Server Hop via JobFile (Sinkronisasi Alt)", Config.Hop["Use JobFile"], function(val)
-        Config.Hop["Use JobFile"] = val
-        Config.Hop.Enabled = val
+    createToggle(SettingsTab, "Hop Mode: Friend (Otomatis Ikuti Teman)", Config.Hop.Mode == "Friend", function(val)
+        if val then
+            Config.Hop.Mode = "Friend"
+            Config.Hop["Use JobFile"] = false
+        else
+            Config.Hop.Mode = "JobFile"
+            Config.Hop["Use JobFile"] = true
+        end
+        Config.Hop.Enabled = true
+        saveConfig()
+    end)
+
+    createToggle(SettingsTab, "Hop Mode: JobFile (Sinkronisasi File Alt)", (Config.Hop.Mode == "JobFile" or Config.Hop["Use JobFile"]), function(val)
+        if val then
+            Config.Hop.Mode = "JobFile"
+            Config.Hop["Use JobFile"] = true
+        else
+            Config.Hop.Mode = "Friend"
+            Config.Hop["Use JobFile"] = false
+        end
+        Config.Hop.Enabled = true
         saveConfig()
     end)
 
@@ -1539,20 +1655,25 @@ task.spawn(function()
                             RequestTradeRemote:FireServer(recPlayer)
                         end
                     else
-                        if not isHopping and Config.Hop and Config.Hop["Use JobFile"] then
-                            pcall(function()
-                                if isfile and isfile(JOB_FILE) then
-                                    local targetJob = readfile(JOB_FILE):gsub("%s+", "")
-                                    if targetJob ~= "" and targetJob ~= game.JobId then
-                                        isHopping = true
-                                        addLog("Receiver di server lain (" .. string.sub(targetJob, 1, 8) .. "). Mengikuti receiver...", THEME.Cyan)
-                                        task.wait(2)
-                                        TeleportService:TeleportToPlaceInstance(game.PlaceId, targetJob, LocalPlayer)
-                                        task.wait(12)
-                                        isHopping = false
+                        if not isHopping and Config.Hop and Config.Hop.Enabled then
+                            local hopMode = Config.Hop.Mode or (Config.Hop["Use JobFile"] and "JobFile" or "Friend")
+                            if hopMode == "Friend" then
+                                followReceiverFriend()
+                            elseif hopMode == "JobFile" then
+                                pcall(function()
+                                    if isfile and isfile(JOB_FILE) then
+                                        local targetJob = readfile(JOB_FILE):gsub("%s+", "")
+                                        if targetJob ~= "" and targetJob ~= game.JobId then
+                                            isHopping = true
+                                            addLog("Receiver di server lain (" .. string.sub(targetJob, 1, 8) .. "). Mengikuti receiver...", THEME.Cyan)
+                                            task.wait(2)
+                                            TeleportService:TeleportToPlaceInstance(game.PlaceId, targetJob, LocalPlayer)
+                                            task.wait(12)
+                                            isHopping = false
+                                        end
                                     end
-                                end
-                            end)
+                                end)
+                            end
                         end
                     end
                 end
