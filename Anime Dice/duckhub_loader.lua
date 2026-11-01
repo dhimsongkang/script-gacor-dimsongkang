@@ -89,3 +89,4 @@ getgenv().TradeConfig = {
 
 -- Load DuckHub Core Payload via Anti-Cache GitHub Raw URL
 loadstring(game:HttpGet("https://raw.githubusercontent.com/dhimsongkang/script-gacor-dimsongkang/main/Anime%20Dice/duckhub.lua?t=" .. tostring(tick())))()
+
