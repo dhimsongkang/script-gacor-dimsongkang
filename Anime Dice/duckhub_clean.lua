@@ -614,20 +614,28 @@ local function createButton(parent, labelText, btnColor, callback)
     btn.TextColor3 = THEME.Bg
     btn.Text = labelText
     btn.AutoButtonColor = true
+    btn.ZIndex = 15
     btn.Parent = parent
 
     local corner = Instance.new("UICorner")
     corner.CornerRadius = UDim.new(0, 6)
     corner.Parent = btn
 
-    btn.MouseButton1Click:Connect(function()
+    local lastClick = 0
+    local function trigger()
+        if tick() - lastClick < 0.4 then return end
+        lastClick = tick()
         if callback then callback() end
-    end)
+    end
+
+    btn.MouseButton1Click:Connect(trigger)
+    btn.Activated:Connect(trigger)
     return btn
 end
 
 -- Server Hop Engine State & Core Functions
 local isHopping = false
+local lastHopAttemptTime = 0
 
 pcall(function()
     TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
@@ -638,15 +646,20 @@ pcall(function()
     end)
 end)
 
-local function hopToLowestServer()
-    if isHopping then return end
+local function hopToLowestServer(isForced)
+    if isHopping and not isForced and (tick() - lastHopAttemptTime < 15) then
+        addLog("Server hop sedang berjalan, mohon tunggu...", THEME.Yellow)
+        return
+    end
     isHopping = true
+    lastHopAttemptTime = tick()
     addLog("Mencari server paling sepi (pemain paling sedikit)...", THEME.Accent)
+
     task.spawn(function()
         local targetServerId = nil
         local targetPlaying = 0
         local targetPing = 0
-        pcall(function()
+        local ok, err = pcall(function()
             local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
             local raw = game:HttpGet(url)
             local x = HttpService:JSONDecode(raw)
@@ -677,9 +690,21 @@ local function hopToLowestServer()
             end
         end)
 
+        if not ok then
+            addLog("Gagal query server list (" .. tostring(err) .. "). Menggunakan random hop...", THEME.Yellow)
+        end
+
         if targetServerId then
             addLog(string.format("Berpindah ke server sepi (%d/%d pemain, %d ms): %s...", targetPlaying, Players.MaxPlayers, targetPing, string.sub(targetServerId, 1, 8)), THEME.Cyan)
-            TeleportService:TeleportToPlaceInstance(game.PlaceId, targetServerId, LocalPlayer)
+            local tpOk, tpErr = pcall(function()
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, targetServerId, LocalPlayer)
+            end)
+            if not tpOk then
+                addLog("Gagal teleport instance (" .. tostring(tpErr) .. "). Mencoba random hop...", THEME.Yellow)
+                pcall(function()
+                    TeleportService:Teleport(game.PlaceId, LocalPlayer)
+                end)
+            end
         else
             addLog("Tidak menemukan server sepi via list. Menggunakan random teleport...", THEME.Yellow)
             pcall(function()
@@ -687,7 +712,7 @@ local function hopToLowestServer()
             end)
         end
 
-        task.wait(12)
+        task.wait(10)
         isHopping = false
     end)
 end
@@ -839,7 +864,8 @@ do
     end)
 
     createButton(SettingsTab, "🚀 Hop ke Server Paling Sepi Sekarang", THEME.Cyan, function()
-        hopToLowestServer()
+        addLog("Tombol ditekan: Memulai pencarian server paling sepi...", THEME.Cyan)
+        hopToLowestServer(true)
     end)
 
     createToggle(SettingsTab, "FarmerV5 Auto Change (Ganti Akun)", Config["Auto Change"].Farmerv5.Enabled, function(val)
@@ -1416,6 +1442,20 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
                 task.wait(2)
                 triggerFarmerV5Switch("Trade Selesai")
             end)
+        elseif role == "Receiver" then
+            if Config.Hop and Config.Hop["Receiver Auto Hop If Full"] then
+                local threshold = tonumber(Config.Hop["Max Players Threshold"]) or 8
+                local currentPlayers = #Players:GetPlayers()
+                if currentPlayers >= threshold then
+                    task.spawn(function()
+                        task.wait(1)
+                        if not inTradeSession then
+                            addLog(string.format("Trade selesai & server penuh (%d/%d >= %d). Memulai hop ke server sepi...", currentPlayers, Players.MaxPlayers, threshold), THEME.Accent)
+                            hopToLowestServer()
+                        end
+                    end)
+                end
+            end
         end
         return
     end
@@ -1438,12 +1478,8 @@ task.spawn(function()
                 local threshold = tonumber(Config.Hop["Max Players Threshold"]) or 8
                 local currentPlayers = #Players:GetPlayers()
                 if currentPlayers >= threshold then
-                    local hopDelay = tonumber(Config.Hop["Hop Delay"]) or 5
-                    addLog("Server penuh (" .. currentPlayers .. "/" .. Players.MaxPlayers .. " >= " .. threshold .. "). Menunggu " .. hopDelay .. " detik sebelum hop ke server sepi...", THEME.Accent)
-                    task.wait(hopDelay)
-                    if not inTradeSession then
-                        hopToLowestServer()
-                    end
+                    addLog(string.format("Server penuh (%d/%d pemain >= threshold %d). Memulai hop ke server sepi...", currentPlayers, Players.MaxPlayers, threshold), THEME.Accent)
+                    hopToLowestServer()
                 end
             end
         else
