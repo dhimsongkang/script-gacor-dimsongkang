@@ -2258,6 +2258,9 @@ local inTradeSession = false
 local lastRequestTime = 0
 local lastOfferedUnitUUID = nil
 local isAdvancing = false
+local isConfirming = false
+local tradeSessionStartTime = 0
+local confirmPhaseStartTime = 0
 
 
 
@@ -2494,6 +2497,9 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
         activeTradeData = nil
         lastOfferedUnitUUID = nil
         isAdvancing = false
+        isConfirming = false
+        tradeSessionStartTime = tick()
+        confirmPhaseStartTime = 0
         
         log(string.format("Trade session STARTED with %s!", partner.Name), UI.Colors.successGreen)
         setStatus("TRADING WITH " .. partner.Name:upper(), UI.Colors.accentCyan)
@@ -2530,9 +2536,14 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
         local ownOffer = payload and payload.ownOffer or {}
         
         
+        if phase == "Confirm" or phase == "Saving" then
+            if confirmPhaseStartTime == 0 then
+                confirmPhaseStartTime = tick()
+            end
+        end
+        
         if Settings.Role == "Sender" and Settings.AutoAdvance then
             if phase == "Offer" then
-                
                 local hasOffer = false
                 for _, count in pairs(ownOffer) do
                     if count and count > 0 then hasOffer = true break end
@@ -2557,19 +2568,23 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
                         isAdvancing = false
                     end)
                 end
-            elseif (phase == "Confirm" or phase == "Saving") and not ownAccepted and not isAdvancing then
-                isAdvancing = true
+            elseif (phase == "Confirm" or phase == "Saving") and not ownAccepted and not isConfirming then
+                isConfirming = true
                 task.spawn(function()
-                    task.wait(math.max(0.3, tonumber(Settings.SafetyDelay) or 0.8))
-                    if inTradeSession and activeTradeData and (activeTradeData.phase == "Confirm" or activeTradeData.phase == "Saving") and not activeTradeData.ownAccepted then
-                        log("Sender clicking CONFIRM ACCEPT...", UI.Colors.accentGreen)
+                    local countdown = (TradeConfig and tonumber(TradeConfig.COUNTDOWN_DURATION)) or 3
+                    local delayTime = countdown + 0.3 + math.max(0, tonumber(Settings.SafetyDelay) or 0.5)
+                    task.wait(delayTime)
+                    local retries = 0
+                    while inTradeSession and activeTradeData and (activeTradeData.phase == "Confirm" or activeTradeData.phase == "Saving") and not activeTradeData.ownAccepted and retries < 15 do
+                        log(string.format("Sender clicking CONFIRM ACCEPT (attempt %d)...", retries + 1), UI.Colors.accentGreen)
                         AdvanceTradeRemote:FireServer()
+                        retries = retries + 1
+                        task.wait(0.6)
                     end
-                    isAdvancing = false
+                    isConfirming = false
                 end)
             end
         end
-        
         
         if Settings.Role == "Receiver" and Settings.AutoAdvance then
             if phase == "Offer" and not ownReady and not isAdvancing then
@@ -2582,15 +2597,20 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
                     end
                     isAdvancing = false
                 end)
-            elseif (phase == "Confirm" or phase == "Saving") and not ownAccepted and not isAdvancing then
-                isAdvancing = true
+            elseif (phase == "Confirm" or phase == "Saving") and not ownAccepted and not isConfirming then
+                isConfirming = true
                 task.spawn(function()
-                    task.wait(math.max(0.4, tonumber(Settings.SafetyDelay) or 0.8))
-                    if inTradeSession and activeTradeData and (activeTradeData.phase == "Confirm" or activeTradeData.phase == "Saving") and not activeTradeData.ownAccepted then
-                        log("Receiver clicking CONFIRM ACCEPT...", UI.Colors.accentGreen)
+                    local countdown = (TradeConfig and tonumber(TradeConfig.COUNTDOWN_DURATION)) or 3
+                    local delayTime = countdown + 0.3 + math.max(0, tonumber(Settings.SafetyDelay) or 0.5)
+                    task.wait(delayTime)
+                    local retries = 0
+                    while inTradeSession and activeTradeData and (activeTradeData.phase == "Confirm" or activeTradeData.phase == "Saving") and not activeTradeData.ownAccepted and retries < 15 do
+                        log(string.format("Receiver clicking CONFIRM ACCEPT (attempt %d)...", retries + 1), UI.Colors.accentGreen)
                         AdvanceTradeRemote:FireServer()
+                        retries = retries + 1
+                        task.wait(0.6)
                     end
-                    isAdvancing = false
+                    isConfirming = false
                 end)
             end
         end
@@ -2622,6 +2642,9 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
         activeTradeData = nil
         lastOfferedUnitUUID = nil
         isAdvancing = false
+        isConfirming = false
+        tradeSessionStartTime = 0
+        confirmPhaseStartTime = 0
         setStatus("IDLE", UI.Colors.textSecondary)
         return
     end
@@ -2629,6 +2652,30 @@ end)
 
 
 
+
+-- Trade Watchdog: Anti-Stuck & Auto-Recovery Loop
+task.spawn(function()
+    while task.wait(1) do
+        if inTradeSession and Settings.AutoTrade and Settings.AutoAdvance then
+            local phase = activeTradeData and activeTradeData.phase
+            local ownAccepted = activeTradeData and activeTradeData.ownAccepted
+            
+            -- Anti-stuck for Confirm/Saving phase (server countdown is 3s)
+            if (phase == "Confirm" or phase == "Saving") and not ownAccepted then
+                local countdown = (TradeConfig and tonumber(TradeConfig.COUNTDOWN_DURATION)) or 3
+                if confirmPhaseStartTime > 0 and (tick() - confirmPhaseStartTime >= countdown + 0.8) then
+                    AdvanceTradeRemote:FireServer()
+                end
+            end
+            
+            -- Anti-stuck for entire trade session: if stuck for > 35s, cancel and reset
+            if tradeSessionStartTime > 0 and (tick() - tradeSessionStartTime > 35) then
+                log("[Watchdog] Trade session stuck for > 35s! Cancelling trade to recover...", UI.Colors.dangerRed)
+                CancelTradeRemote:FireServer()
+            end
+        end
+    end
+end)
 
 task.spawn(function()
     while task.wait(1.5) do
