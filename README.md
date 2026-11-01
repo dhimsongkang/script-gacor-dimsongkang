@@ -21,6 +21,10 @@ Koleksi lengkap skrip Roblox yang sudah dideobfuskasi & dibersihkan dari proteks
   ```lua
   loadstring(game:HttpGet("https://raw.githubusercontent.com/dhkmastry-crypto/roblox-scripts/main/Anime%20Dice/hiphub_ad_trade_clean.lua"))()
   ```
+- **DuckHub AD Trade (Clean Deobfuscated with Glass UI & Config Manager):**
+  ```lua
+  loadstring(game:HttpGet("https://raw.githubusercontent.com/dhkmastry-crypto/roblox-scripts/main/Anime%20Dice/duckhub_clean.lua"))()
+  ```
 
 ---
 
