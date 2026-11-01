@@ -113,7 +113,7 @@
     "Max Sell Per Run": 10
   },
   "Auto Change": {
-    "Enabled": false,
+    "Enabled": true,
     "Farmsync": {
       "Enabled": false,
       "Folder From": "",
@@ -125,7 +125,7 @@
       "Enabled": false
     },
     "Farmerv5": {
-      "Enabled": false,
+      "Enabled": true,
       "API Key": "ak_9b01456dd738b682fa9ef5ed989130bf471794cf06e91d6bc9474507cd72d1bc",
       "Option": 1
     }

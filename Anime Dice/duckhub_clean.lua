@@ -102,7 +102,7 @@ local DEFAULT_CONFIG = {
         ["Max Sell Per Run"] = 10,
     },
     ["Auto Change"] = {
-        ["Enabled"] = false,
+        ["Enabled"] = true,
         ["Farmsync"] = { ["Enabled"] = false, ["Folder From"] = "", ["Folder To"] = "", ["Without Replace"] = false, ["Config ID"] = nil },
         ["Yummy"] = { ["Enabled"] = false },
         ["Farmerv5"] = { ["Enabled"] = true, ["API Key"] = "ak_9b01456dd738b682fa9ef5ed989130bf471794cf06e91d6bc9474507cd72d1bc", ["Option"] = 1 },
@@ -844,10 +844,15 @@ do
 
     createToggle(SettingsTab, "FarmerV5 Auto Change (Ganti Akun)", Config["Auto Change"].Farmerv5.Enabled, function(val)
         Config["Auto Change"].Farmerv5.Enabled = val
+        if Config["Auto Change"] then
+            Config["Auto Change"].Enabled = val
+        end
+        saveConfig()
     end)
 
     createTextInput(SettingsTab, "FarmerV5 API Key", Config["Auto Change"].Farmerv5["API Key"], function(val)
         Config["Auto Change"].Farmerv5["API Key"] = val
+        saveConfig()
     end)
 
     -- Save Button
@@ -954,6 +959,9 @@ local isProcessingOffer = false
 local isAdvancing = false
 local lastRequestTime = 0
 local lastEmptyNoticeTime = 0
+local scriptStartTime = tick()
+local isFarmerSwitching = false
+local lastFarmerSwitchTime = 0
 
 local function getEquippedUUIDs()
     local equipped = {}
@@ -1137,6 +1145,57 @@ local function isAllowedSender(senderName)
     return false
 end
 
+local function triggerFarmerV5Switch(reason)
+    if getRole() == "Receiver" then return end
+    if isFarmerSwitching or (tick() - lastFarmerSwitchTime < 15) then return end
+    
+    local autoChange = Config["Auto Change"]
+    local farmerCfg = autoChange and autoChange.Farmerv5
+    if not farmerCfg then return end
+
+    local isEnabled = (farmerCfg.Enabled == true) or (autoChange and autoChange.Enabled == true)
+    if not isEnabled then return end
+
+    local apiKey = farmerCfg["API Key"]
+    if not apiKey or apiKey == "" then return end
+
+    local req = request or (syn and syn.request) or (http and http.request) or http_request
+    if not req then
+        addLog("FarmerV5: Executor tidak mendukung fungsi HTTP request!", THEME.Red)
+        return
+    end
+
+    isFarmerSwitching = true
+    lastFarmerSwitchTime = tick()
+
+    task.spawn(function()
+        local why = reason or "Event"
+        addLog("FarmerV5: Mengirim sinyal ganti akun (" .. why .. ")...", THEME.Accent)
+        
+        local payload = HttpService:JSONEncode({
+            apiKey = tostring(apiKey),
+            option = tonumber(farmerCfg["Option"]) or 1
+        })
+        
+        local success, res = pcall(function()
+            return req({
+                Url = "http://127.0.0.1:8768/api/switch",
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = payload
+            })
+        end)
+
+        if success then
+            local statusCode = res and (res.StatusCode or res.status_code)
+            addLog("FarmerV5: Sinyal ganti akun terkirim! (Status: " .. tostring(statusCode or "OK") .. ")", THEME.Green)
+        else
+            addLog("FarmerV5: Gagal kirim sinyal (" .. tostring(res) .. ")", THEME.Red)
+            isFarmerSwitching = false
+        end
+    end)
+end
+
 -- Trade Network Events Hook
 TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
     if not Config.Enabled then return end
@@ -1159,6 +1218,7 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
                 if Config.Settings and Config.Settings["Stop When Empty"] and not hasItemsToSend() then
                     addLog("Menolak trade dari Receiver (inventaris kosong).", THEME.TextMuted)
                     RespondToRequestRemote:FireServer(false)
+                    triggerFarmerV5Switch("Inventaris Kosong Saat Trade Request")
                 else
                     addLog("Menerima trade request dari Receiver: " .. sender.Name, THEME.Green)
                     RespondToRequestRemote:FireServer(true)
@@ -1301,26 +1361,11 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
         StatusBadge.Text = role:upper() .. " [IDLE]"
         StatusBadge.TextColor3 = THEME.Cyan
 
-        if role == "Sender" and Config["Auto Change"] and Config["Auto Change"].Enabled then
-            local farmerCfg = Config["Auto Change"].Farmerv5
-            if farmerCfg and farmerCfg.Enabled and farmerCfg["API Key"] then
-                task.spawn(function()
-                    task.wait(2)
-                    local req = request or (syn and syn.request) or (http and http.request) or http_request
-                    if req then
-                        addLog("Mengirim sinyal ganti akun ke FarmerV5...", THEME.Accent)
-                        req({
-                            Url = "http://127.0.0.1:8768/api/switch",
-                            Method = "POST",
-                            Headers = { ["Content-Type"] = "application/json" },
-                            Body = HttpService:JSONEncode({
-                                apiKey = farmerCfg["API Key"],
-                                option = farmerCfg["Option"] or 1
-                            })
-                        })
-                    end
-                end)
-            end
+        if role == "Sender" then
+            task.spawn(function()
+                task.wait(2)
+                triggerFarmerV5Switch("Trade Selesai")
+            end)
         end
         return
     end
@@ -1353,13 +1398,19 @@ task.spawn(function()
             end
         else
             if not inTradeSession and (Config.Settings and Config.Settings["Auto Loop Trade"]) then
-                if Config.Settings and Config.Settings["Stop When Empty"] and not hasItemsToSend() then
+                local invLoaded = false
+                pcall(function()
+                    invLoaded = (DataController and DataController.Inventory and DataController.Inventory() ~= nil)
+                end)
+
+                if invLoaded and (tick() - scriptStartTime >= 6) and (not hasItemsToSend()) then
                     if tick() - lastEmptyNoticeTime >= 15 then
                         lastEmptyNoticeTime = tick()
                         StatusBadge.Text = role:upper() .. " [KOSONG]"
                         StatusBadge.TextColor3 = THEME.TextMuted
-                        addLog("Inventaris kosong (tidak ada unit/token filter tersisa). Menunggu item baru...", THEME.TextMuted)
+                        addLog("Inventaris kosong. Mengirim sinyal ganti akun ke FarmerV5...", THEME.TextMuted)
                     end
+                    triggerFarmerV5Switch("Inventaris Kosong")
                 else
                     local recPlayer = Players:FindFirstChild(Config.Receiver)
                     if recPlayer then
