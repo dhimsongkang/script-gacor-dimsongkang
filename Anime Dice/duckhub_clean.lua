@@ -105,7 +105,7 @@ local DEFAULT_CONFIG = {
         ["Enabled"] = true,
         ["Farmsync"] = { ["Enabled"] = false, ["Folder From"] = "", ["Folder To"] = "", ["Without Replace"] = false, ["Config ID"] = nil },
         ["Yummy"] = { ["Enabled"] = false },
-        ["Farmerv5"] = { ["Enabled"] = true, ["API Key"] = "ak_9b01456dd738b682fa9ef5ed989130bf471794cf06e91d6bc9474507cd72d1bc", ["Option"] = 1 },
+        ["Farmerv5"] = { ["Enabled"] = true, ["API Key"] = "ak_9b01456dd738b682fa9ef5ed989130bf471794cf06e91d6bc9474507cd72d1bc", ["Option"] = 1, ["Base URL"] = "http://127.0.0.1:8768" },
     }
 }
 
@@ -855,6 +855,16 @@ do
         saveConfig()
     end)
 
+    createTextInput(SettingsTab, "FarmerV5 Autoswap Rule (Option)", Config["Auto Change"].Farmerv5["Option"] or 1, function(val)
+        Config["Auto Change"].Farmerv5["Option"] = tonumber(val) or 1
+        saveConfig()
+    end)
+
+    createTextInput(SettingsTab, "FarmerV5 Base URL (Domain / IP)", Config["Auto Change"].Farmerv5["Base URL"] or "http://127.0.0.1:8768", function(val)
+        Config["Auto Change"].Farmerv5["Base URL"] = val
+        saveConfig()
+    end)
+
     -- Save Button
     local saveBtn = Instance.new("TextButton")
     saveBtn.Size = UDim2.new(1, 0, 0, 36)
@@ -1170,25 +1180,49 @@ local function triggerFarmerV5Switch(reason)
 
     task.spawn(function()
         local why = reason or "Event"
-        addLog("FarmerV5: Mengirim sinyal ganti akun (" .. why .. ")...", THEME.Accent)
+        addLog("FarmerV5: Mengirim autoswap (" .. why .. ")...", THEME.Accent)
         
+        local baseUrl = farmerCfg["Base URL"] or "http://127.0.0.1:8768"
+        baseUrl = baseUrl:gsub("/+$", "")
+        local endpoint = baseUrl .. "/api/accounts/autoswap-complete"
+
         local payload = HttpService:JSONEncode({
-            apiKey = tostring(apiKey),
-            option = tonumber(farmerCfg["Option"]) or 1
+            ["username"] = tostring(LocalPlayer.Name),
+            ["option"] = tonumber(farmerCfg["Option"]) or 1
         })
         
         local success, res = pcall(function()
             return req({
-                Url = "http://127.0.0.1:8768/api/switch",
+                Url = endpoint,
                 Method = "POST",
-                Headers = { ["Content-Type"] = "application/json" },
+                Headers = {
+                    ["Content-Type"] = "application/json",
+                    ["X-Api-Key"] = tostring(apiKey)
+                },
                 Body = payload
             })
         end)
 
-        if success then
-            local statusCode = res and (res.StatusCode or res.status_code)
-            addLog("FarmerV5: Sinyal ganti akun terkirim! (Status: " .. tostring(statusCode or "OK") .. ")", THEME.Green)
+        if success and res then
+            local statusCode = tonumber(res.StatusCode or res.status_code) or 200
+            local bodyText = res.Body or res.body or ""
+            local data = nil
+            pcall(function() data = HttpService:JSONDecode(bodyText) end)
+
+            if data and data.outcome then
+                if data.outcome == "swapped" then
+                    addLog("FarmerV5: Berhasil Swap Akun! Pengganti: " .. tostring(data.replacement or "-"), THEME.Green)
+                elseif data.outcome == "moved" then
+                    addLog("FarmerV5: Akun dipindahkan (moved) tanpa pengganti.", THEME.Green)
+                elseif data.outcome == "not_fired" then
+                    addLog("FarmerV5: Autoswap not_fired (cek rule / ketersediaan pengganti).", THEME.TextMuted)
+                    isFarmerSwitching = false
+                else
+                    addLog("FarmerV5: Response: " .. tostring(data.outcome), THEME.Cyan)
+                end
+            else
+                addLog("FarmerV5: Sinyal terkirim (Status: " .. tostring(statusCode) .. ")", THEME.Green)
+            end
         else
             addLog("FarmerV5: Gagal kirim sinyal (" .. tostring(res) .. ")", THEME.Red)
             isFarmerSwitching = false
