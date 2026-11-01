@@ -14,7 +14,7 @@ local Settings = {
     AutoTrade = true,
     
     
-    HostUsername = "itrast11",   
+    HostUsername = "dimsongkang1",   
     AcceptAnyRequester = true,   
     TargetPlayers = {},          
     UnitsPerPlayer = 1,          
