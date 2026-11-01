@@ -230,6 +230,25 @@ local THEME = {
     TextMuted = Color3.fromRGB(150, 156, 175)
 }
 
+local LogContainer = nil
+local function addLog(text, color)
+    print("[DuckHub] " .. tostring(text))
+    if not LogContainer then return end
+    pcall(function()
+        local timeStr = os.date("%H:%M:%S")
+        local l = Instance.new("TextLabel")
+        l.Size = UDim2.new(1, 0, 0, 18)
+        l.BackgroundTransparency = 1
+        l.Font = Enum.Font.Code
+        l.TextSize = 11
+        l.TextColor3 = color or THEME.Text
+        l.TextXAlignment = Enum.TextXAlignment.Left
+        l.Text = string.format("[%s] %s", timeStr, tostring(text))
+        l.Parent = LogContainer
+        LogContainer.CanvasPosition = Vector2.new(0, 999999)
+    end)
+end
+
 -- Destroy old UI if exists
 pcall(function()
     local old = game:GetService("CoreGui"):FindFirstChild("DuckHub_Trade_GUI")
@@ -1077,7 +1096,6 @@ do
 end
 
 -- 4.5 Logs Tab
-local LogContainer = nil
 do
     local clearBtn = Instance.new("TextButton")
     clearBtn.Size = UDim2.new(1, 0, 0, 28)
@@ -1121,24 +1139,6 @@ do
         for _, c in ipairs(LogContainer:GetChildren()) do
             if c:IsA("TextLabel") then c:Destroy() end
         end
-    end)
-end
-
-local function addLog(text, color)
-    print("[DuckHub] " .. text)
-    if not LogContainer then return end
-    pcall(function()
-        local timeStr = os.date("%H:%M:%S")
-        local l = Instance.new("TextLabel")
-        l.Size = UDim2.new(1, 0, 0, 18)
-        l.BackgroundTransparency = 1
-        l.Font = Enum.Font.Code
-        l.TextSize = 11
-        l.TextColor3 = color or THEME.Text
-        l.TextXAlignment = Enum.TextXAlignment.Left
-        l.Text = string.format("[%s] %s", timeStr, text)
-        l.Parent = LogContainer
-        LogContainer.CanvasPosition = Vector2.new(0, 999999)
     end)
 end
 
