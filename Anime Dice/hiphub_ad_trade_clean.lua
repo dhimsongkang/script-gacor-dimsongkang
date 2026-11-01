@@ -1,5 +1,45 @@
 do
 
+if _G.HipHub_AD_Trade_Instance then
+    pcall(function()
+        _G.HipHub_AD_Trade_Instance:Destroy()
+    end)
+end
+
+local InstanceManager = {
+    Connections = {},
+    IsAlive = true,
+}
+
+function InstanceManager:AddConnection(conn)
+    if conn then
+        table.insert(self.Connections, conn)
+    end
+    return conn
+end
+
+function InstanceManager:Destroy()
+    self.IsAlive = false
+    for _, conn in ipairs(self.Connections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    self.Connections = {}
+    pcall(function()
+        local coreGui = game:GetService("CoreGui")
+        local playerGui = game:GetService("Players").LocalPlayer and game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+        for _, p in ipairs({coreGui, playerGui}) do
+            if p then
+                for _, c in ipairs(p:GetChildren()) do
+                    if c.Name == "HipHub_ad_trade_GUI" then
+                        c:Destroy()
+                    end
+                end
+            end
+        end
+    end)
+end
+
+_G.HipHub_AD_Trade_Instance = InstanceManager
 
 local Players = game:GetService("Players")
 local localPlayer = Players.LocalPlayer
@@ -51,8 +91,8 @@ local Settings = {
     CloudRelay = {
         Enabled = true,
         SecretKey = "hiphub_ad_trade",
-        SyncInterval = 1.5,
-        ServerUrl = "https://ntfy.tedomum.fr",
+        SyncInterval = 5,
+        ServerUrl = "https://ntfy.adminforge.de",
     },
 }
 
@@ -157,12 +197,12 @@ function Settings.Load()
                                     for rk, rv in pairs(v) do
                                         Settings.CloudRelay[rk] = rv
                                     end
-                                    if not Settings.CloudRelay.ServerUrl or Settings.CloudRelay.ServerUrl:find("ntfy.sh") then
-                                        Settings.CloudRelay.ServerUrl = "https://ntfy.tedomum.fr"
+                                    if not Settings.CloudRelay.ServerUrl or Settings.CloudRelay.ServerUrl:find("ntfy.sh") or Settings.CloudRelay.ServerUrl:find("tedomum") then
+                                        Settings.CloudRelay.ServerUrl = "https://ntfy.adminforge.de"
                                     end
-                                    local iv = tonumber(Settings.CloudRelay.SyncInterval) or 1.5
-                                    if iv > 2 then
-                                        Settings.CloudRelay.SyncInterval = 1.5
+                                    local iv = tonumber(Settings.CloudRelay.SyncInterval) or 5
+                                    if iv < 3 or iv > 10 then
+                                        Settings.CloudRelay.SyncInterval = 5
                                     end
                                 elseif Settings[k] ~= nil then
                                     Settings[k] = v
@@ -2167,10 +2207,24 @@ local function setStatus(text, color)
     UI.SetStatus(text, color)
 end
 
+local InstanceManager = _G.HipHub_AD_Trade_Instance or {
+    Connections = {},
+    IsAlive = true,
+    AddConnection = function(self, c) return c end,
+    Destroy = function(self) end
+}
+
 -- ====================================================================
 -- Cloud Relay Zero-Chat Peer Discovery
 -- ====================================================================
 local RelayPeers = {}
+local RELAY_SERVERS = {
+    "https://ntfy.adminforge.de",
+    "https://ntfy.envs.net",
+    "https://ntfy.tedomum.fr",
+    "https://ntfy.mzte.de",
+}
+local currentRelayIdx = 1
 
 local function getRelayTopic()
     local secret = (Settings.CloudRelay and Settings.CloudRelay.SecretKey) or "hiphub_ad_trade"
@@ -2182,17 +2236,27 @@ end
 
 local function getRelayServer()
     local s = Settings.CloudRelay and Settings.CloudRelay.ServerUrl
-    if not s or s == "" or s:find("ntfy.sh") then
-        return "https://ntfy.tedomum.fr"
+    if s and s ~= "" and not s:find("ntfy.sh") and not s:find("tedomum") then
+        return s:gsub("/+$", "")
     end
-    return s:gsub("/+$", "")
+    return RELAY_SERVERS[currentRelayIdx]
+end
+
+local function rotateRelayServer(reason)
+    currentRelayIdx = (currentRelayIdx % #RELAY_SERVERS) + 1
+    local nextServer = RELAY_SERVERS[currentRelayIdx]
+    if Settings.CloudRelay then
+        Settings.CloudRelay.ServerUrl = nextServer
+    end
+    log(string.format("Relay auto-failover (%s). Switched to %s", tostring(reason or "429/timeout"), nextServer), UI.Colors.accentOrange)
+    return nextServer
 end
 
 local function isVerifiedPeer(username)
     if not username then return false, nil end
     local lower = username:lower():gsub("%s+", "")
     local peer = RelayPeers[lower]
-    if peer and (tick() - peer.lastSeen <= 60) then
+    if peer and (tick() - peer.lastSeen <= 90) then
         return true, peer
     end
     return false, nil
@@ -2200,7 +2264,7 @@ end
 
 local function getDiscoveredHost()
     for lower, peer in pairs(RelayPeers) do
-        if peer.role == "Sender" and (tick() - peer.lastSeen <= 60) then
+        if peer.role == "Sender" and (tick() - peer.lastSeen <= 90) then
             local p = Players:FindFirstChild(peer.user)
             if p and p ~= localPlayer then
                 return p
@@ -2213,7 +2277,7 @@ end
 local function getDiscoveredReceiverCount()
     local count = 0
     for _, peer in pairs(RelayPeers) do
-        if peer.role == "Receiver" and (tick() - peer.lastSeen <= 60) then
+        if peer.role == "Receiver" and (tick() - peer.lastSeen <= 90) then
             count = count + 1
         end
     end
@@ -2222,7 +2286,16 @@ end
 
 local isSyncingRelay = false
 local function syncRelayPeersNow()
-    if isSyncingRelay then return end
+    -- If already syncing, wait up to 1.5s for in-flight sync to complete
+    if isSyncingRelay then
+        local w = 0
+        while isSyncingRelay and w < 15 do
+            task.wait(0.1)
+            w = w + 1
+        end
+        return
+    end
+    
     isSyncingRelay = true
     local req = request or (syn and syn.request) or (http and http.request) or http_request
     if not req then
@@ -2235,10 +2308,21 @@ local function syncRelayPeersNow()
     
     local pollSuccess, res = pcall(function()
         return req({
-            Url = baseUrl .. "/" .. topic .. "/json?poll=1&since=60s",
+            Url = baseUrl .. "/" .. topic .. "/json?poll=1&since=90s",
             Method = "GET"
         })
     end)
+    
+    -- Auto-rotate on rate limit (429) or network drop (0)
+    if pollSuccess and res and (res.StatusCode == 429 or res.StatusCode == 0 or res.StatusCode >= 500) then
+        baseUrl = rotateRelayServer("HTTP " .. tostring(res.StatusCode))
+        pcall(function()
+            res = req({
+                Url = baseUrl .. "/" .. topic .. "/json?poll=1&since=90s",
+                Method = "GET"
+            })
+        end)
+    end
     
     if pollSuccess and res and res.StatusCode == 200 and res.Body then
         local now = tick()
@@ -2261,7 +2345,7 @@ local function syncRelayPeersNow()
     
     local now = tick()
     for u, peer in pairs(RelayPeers) do
-        if now - peer.lastSeen > 60 then
+        if now - peer.lastSeen > 90 then
             RelayPeers[u] = nil
         end
     end
@@ -2284,33 +2368,43 @@ local function broadcastRelayHeartbeat()
             jobId = game.JobId,
             time = tick()
         })
-        pcall(function()
-            req({
+        local ok, res = pcall(function()
+            return req({
                 Url = baseUrl .. "/" .. topic,
                 Method = "POST",
                 Headers = { ["Content-Type"] = "application/json" },
                 Body = payload
             })
         end)
+        if ok and res and (res.StatusCode == 429 or res.StatusCode == 0) then
+            baseUrl = rotateRelayServer("POST " .. tostring(res.StatusCode))
+            pcall(function()
+                req({
+                    Url = baseUrl .. "/" .. topic,
+                    Method = "POST",
+                    Headers = { ["Content-Type"] = "application/json" },
+                    Body = payload
+                })
+            end)
+        end
     end)
 end
 
 task.spawn(function()
     -- Immediate announcement burst on load
-    task.wait(0.5)
+    task.wait(0.3)
     broadcastRelayHeartbeat()
     syncRelayPeersNow()
-    task.wait(0.8)
+    task.wait(0.7)
     broadcastRelayHeartbeat()
-    syncRelayPeersNow()
     
     local lastPub = 0
     local lastPoll = 0
-    while task.wait(0.5) do
+    while InstanceManager.IsAlive and task.wait(0.5) do
         if Settings.AutoTrade and Settings.CloudRelay and Settings.CloudRelay.Enabled then
             local now = tick()
-            local interval = tonumber(Settings.CloudRelay.SyncInterval) or 1.5
-            if interval < 1 then interval = 1 end
+            local interval = tonumber(Settings.CloudRelay.SyncInterval) or 5
+            if interval < 3 then interval = 3 end
             
             if now - lastPub >= interval then
                 lastPub = now
@@ -2647,7 +2741,8 @@ end
 
 
 
-TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
+InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
+    if not InstanceManager.IsAlive then return end
     if not Settings.AutoTrade or Settings.Role == "Off" then
         return
     end
@@ -2876,7 +2971,7 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
         setStatus("IDLE", UI.Colors.textSecondary)
         return
     end
-end)
+end))
 
 
 
@@ -3211,7 +3306,7 @@ local inputRelaySecret = UI.CreateTextInput(secRelay, "Relay Secret Channel Key"
     broadcastRelayHeartbeat()
 end, 2)
 
-local inputRelayServer = UI.CreateTextInput(secRelay, "Relay Server URL", tostring(Settings.CloudRelay.ServerUrl or "https://ntfy.tedomum.fr"), "https://ntfy.tedomum.fr", function(text)
+local inputRelayServer = UI.CreateTextInput(secRelay, "Relay Server URL", tostring(Settings.CloudRelay.ServerUrl or "https://ntfy.adminforge.de"), "https://ntfy.adminforge.de", function(text)
     Settings.CloudRelay.ServerUrl = text
     Settings.Save()
     log("Relay Server URL updated: " .. text, UI.Colors.accentCyan)
@@ -3228,7 +3323,7 @@ end, 4, "primary")
 local relayCard = UI.CreateInfoCard(secRelay, "Discovered Peers Status", "Initializing Cloud Relay...", 5)
 
 task.spawn(function()
-    while task.wait(2) do
+    while InstanceManager.IsAlive and task.wait(2) do
         pcall(function()
             local activeCount = 0
             local names = {}
