@@ -274,6 +274,8 @@ end
 
 do
 
+local InstanceManager = _G.HipHub_AD_Trade_Instance
+
 
 
 
@@ -2205,6 +2207,16 @@ end
 local function setStatus(text, color)
     UI.SetStatus(text, color)
 end
+
+local InstanceManager = _G.HipHub_AD_Trade_Instance or {
+    Connections = {},
+    Threads = {},
+    IsAlive = true,
+    AddConnection = function(self, c) return c end,
+    AddThread = function(self, t) return t end,
+    Spawn = function(self, f) return task.spawn(f) end,
+    Destroy = function(self) end
+}
 
 -- ====================================================================
 -- FarmerV5 Autoswap Signal Integration
