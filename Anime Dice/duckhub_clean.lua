@@ -102,7 +102,7 @@ local DEFAULT_CONFIG = {
     ["Whitelist Senders"] = {},
     ["Accept Any Sender"] = true,
     ["Units"] = {
-        ["Enabled"] = false,
+        ["Enabled"] = true,
         ["Mode"] = "Rarity",
         ["Rarities"] = {
             ["Legendary"] = false,
@@ -1504,6 +1504,30 @@ local function triggerFarmerV5Switch(reason)
     end)
 end
 
+local function findReceiverPlayer()
+    local target = tostring(Config.Receiver or ""):lower():gsub("%s+", "")
+    if target == "" then return nil end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            local pName = p.Name:lower():gsub("%s+", "")
+            local pDisplay = p.DisplayName:lower():gsub("%s+", "")
+            if pName == target or pDisplay == target then
+                return p
+            end
+        end
+    end
+    return nil
+end
+
+local function isReceiverPlayer(playerObj)
+    if not playerObj then return false end
+    local target = tostring(Config.Receiver or ""):lower():gsub("%s+", "")
+    if target == "" then return false end
+    local pName = playerObj.Name:lower():gsub("%s+", "")
+    local pDisplay = playerObj.DisplayName:lower():gsub("%s+", "")
+    return pName == target or pDisplay == target
+end
+
 -- Trade Network Events Hook
 InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
     if not InstanceManager.IsAlive or not Config.Enabled then return end
@@ -1522,7 +1546,7 @@ InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(ev
                 RespondToRequestRemote:FireServer(false)
             end
         else
-            if sender.Name:lower() == (Config.Receiver or ""):lower() then
+            if isReceiverPlayer(sender) then
                 if Config.Settings and Config.Settings["Stop When Empty"] and not hasItemsToSend() then
                     addLog("Menolak trade dari Receiver (inventaris kosong).", THEME.TextMuted)
                     RespondToRequestRemote:FireServer(false)
@@ -1749,8 +1773,12 @@ InstanceManager:Spawn(function()
                     end
                 end
             else
+                pcall(function()
+                    SetTradeRequestsEnabledRemote:FireServer(true)
+                end)
+
                 if not inTradeSession and (Config.Settings and Config.Settings["Auto Loop Trade"]) then
-                    local recPlayer = Players:FindFirstChild(Config.Receiver)
+                    local recPlayer = findReceiverPlayer()
                     if not recPlayer then
                         -- Receiver TIDAK ADA di server ini: Prioritaskan mencari dan mengikuti server Receiver!
                         if not isHopping and Config.Hop and Config.Hop.Enabled then

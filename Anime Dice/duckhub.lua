@@ -6,6 +6,74 @@
 
 repeat task.wait() until game:IsLoaded()
 
+-- Single-Instance Manager & Duplicate Prevention
+if _G.DuckHub_Instance then
+    pcall(function()
+        _G.DuckHub_Instance:Destroy()
+    end)
+end
+
+-- Force-disable any orphaned connections on TradeEventRemote from previous runs
+pcall(function()
+    if getconnections then
+        local net = game:GetService("ReplicatedStorage"):FindFirstChild("Network")
+        local tradeService = net and net:FindFirstChild("TradeService")
+        local re = tradeService and tradeService:FindFirstChild("RE")
+        local tradeEvent = re and re:FindFirstChild("TradeEvent")
+        if tradeEvent then
+            for _, conn in ipairs(getconnections(tradeEvent.OnClientEvent)) do
+                pcall(function() conn:Disable() end)
+            end
+        end
+    end
+end)
+
+local InstanceManager = {
+    Connections = {},
+    Threads = {},
+    IsAlive = true,
+}
+
+function InstanceManager:AddConnection(conn)
+    if conn then
+        table.insert(self.Connections, conn)
+    end
+    return conn
+end
+
+function InstanceManager:Spawn(fn)
+    local thread = task.spawn(fn)
+    table.insert(self.Threads, thread)
+    return thread
+end
+
+function InstanceManager:Destroy()
+    self.IsAlive = false
+    for _, conn in ipairs(self.Connections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    self.Connections = {}
+    for _, thread in ipairs(self.Threads) do
+        pcall(task.cancel, thread)
+    end
+    self.Threads = {}
+    pcall(function()
+        local coreGui = game:GetService("CoreGui")
+        local playerGui = game:GetService("Players").LocalPlayer and game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+        for _, p in ipairs({coreGui, playerGui}) do
+            if p then
+                for _, c in ipairs(p:GetChildren()) do
+                    if c.Name == "DuckHub_Trade_GUI" then
+                        c:Destroy()
+                    end
+                end
+            end
+        end
+    end)
+end
+
+_G.DuckHub_Instance = InstanceManager
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
@@ -34,7 +102,7 @@ local DEFAULT_CONFIG = {
     ["Whitelist Senders"] = {},
     ["Accept Any Sender"] = true,
     ["Units"] = {
-        ["Enabled"] = false,
+        ["Enabled"] = true,
         ["Mode"] = "Rarity",
         ["Rarities"] = {
             ["Legendary"] = false,
@@ -657,12 +725,12 @@ local isHopping = false
 local lastHopAttemptTime = 0
 
 pcall(function()
-    TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
+    InstanceManager:AddConnection(TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
         if player == LocalPlayer then
             isHopping = false
             addLog("Teleport gagal: " .. tostring(errorMessage), THEME.Rose)
         end
-    end)
+    end))
 end)
 
 local function hopToLowestServer(isForced)
@@ -1155,6 +1223,8 @@ local activePartner = nil
 local activeTradeData = nil
 local isProcessingOffer = false
 local isAdvancing = false
+local isConfirming = false
+local confirmPhaseStartTime = 0
 local lastRequestTime = 0
 local lastEmptyNoticeTime = 0
 local scriptStartTime = tick()
@@ -1434,9 +1504,33 @@ local function triggerFarmerV5Switch(reason)
     end)
 end
 
+local function findReceiverPlayer()
+    local target = tostring(Config.Receiver or ""):lower():gsub("%s+", "")
+    if target == "" then return nil end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            local pName = p.Name:lower():gsub("%s+", "")
+            local pDisplay = p.DisplayName:lower():gsub("%s+", "")
+            if pName == target or pDisplay == target then
+                return p
+            end
+        end
+    end
+    return nil
+end
+
+local function isReceiverPlayer(playerObj)
+    if not playerObj then return false end
+    local target = tostring(Config.Receiver or ""):lower():gsub("%s+", "")
+    if target == "" then return false end
+    local pName = playerObj.Name:lower():gsub("%s+", "")
+    local pDisplay = playerObj.DisplayName:lower():gsub("%s+", "")
+    return pName == target or pDisplay == target
+end
+
 -- Trade Network Events Hook
-TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
-    if not Config.Enabled then return end
+InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
+    if not InstanceManager.IsAlive or not Config.Enabled then return end
     local role = getRole()
 
     if eventType == "RequestReceived" then
@@ -1452,7 +1546,7 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
                 RespondToRequestRemote:FireServer(false)
             end
         else
-            if sender.Name:lower() == (Config.Receiver or ""):lower() then
+            if isReceiverPlayer(sender) then
                 if Config.Settings and Config.Settings["Stop When Empty"] and not hasItemsToSend() then
                     addLog("Menolak trade dari Receiver (inventaris kosong).", THEME.TextMuted)
                     RespondToRequestRemote:FireServer(false)
@@ -1475,6 +1569,8 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
         activeTradeData = nil
         isProcessingOffer = false
         isAdvancing = false
+        isConfirming = false
+        confirmPhaseStartTime = 0
 
         StatusBadge.Text = role:upper() .. " [TRADING]"
         StatusBadge.TextColor3 = THEME.Green
@@ -1535,7 +1631,13 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
         local phase = payload and payload.phase or "Offer"
         local ownReady = payload and payload.ownReady or false
         local ownAccepted = payload and payload.ownAccepted or false
-        local readyDelay = (Config.Settings and Config.Settings["Ready Wait Time"]) or 1.0
+        local readyDelay = (Config.Settings and tonumber(Config.Settings["Ready Wait Time"])) or 1.0
+
+        if phase == "Confirm" or phase == "Saving" then
+            if confirmPhaseStartTime == 0 then
+                confirmPhaseStartTime = tick()
+            end
+        end
 
         if role == "Sender" and not isProcessingOffer then
             if phase == "Offer" and not ownReady and not isAdvancing then
@@ -1548,15 +1650,20 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
                     end
                     isAdvancing = false
                 end)
-            elseif (phase == "Confirm" or phase == "Saving") and not ownAccepted and not isAdvancing then
-                isAdvancing = true
+            elseif (phase == "Confirm" or phase == "Saving") and not ownAccepted and not isConfirming then
+                isConfirming = true
                 task.spawn(function()
-                    task.wait(readyDelay)
-                    if inTradeSession and activeTradeData and not activeTradeData.ownAccepted then
-                        addLog("Sender menekan CONFIRM ACCEPT...", THEME.Green)
+                    local countdown = (TradeConfigModule and tonumber(TradeConfigModule.COUNTDOWN_DURATION)) or 3
+                    local delayTime = countdown + 0.3 + math.max(0, readyDelay)
+                    task.wait(delayTime)
+                    local retries = 0
+                    while inTradeSession and activeTradeData and (activeTradeData.phase == "Confirm" or activeTradeData.phase == "Saving") and not activeTradeData.ownAccepted and retries < 15 do
+                        addLog(string.format("Sender menekan CONFIRM ACCEPT (attempt %d)...", retries + 1), THEME.Green)
                         AdvanceTradeRemote:FireServer()
+                        retries = retries + 1
+                        task.wait(0.6)
                     end
-                    isAdvancing = false
+                    isConfirming = false
                 end)
             end
         end
@@ -1572,15 +1679,20 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
                     end
                     isAdvancing = false
                 end)
-            elseif (phase == "Confirm" or phase == "Saving") and not ownAccepted and not isAdvancing then
-                isAdvancing = true
+            elseif (phase == "Confirm" or phase == "Saving") and not ownAccepted and not isConfirming then
+                isConfirming = true
                 task.spawn(function()
-                    task.wait(0.5)
-                    if inTradeSession and activeTradeData and not activeTradeData.ownAccepted then
-                        addLog("Receiver menekan CONFIRM...", THEME.Green)
+                    local countdown = (TradeConfigModule and tonumber(TradeConfigModule.COUNTDOWN_DURATION)) or 3
+                    local delayTime = countdown + 0.3 + math.max(0, readyDelay)
+                    task.wait(delayTime)
+                    local retries = 0
+                    while inTradeSession and activeTradeData and (activeTradeData.phase == "Confirm" or activeTradeData.phase == "Saving") and not activeTradeData.ownAccepted and retries < 15 do
+                        addLog(string.format("Receiver menekan CONFIRM ACCEPT (attempt %d)...", retries + 1), THEME.Green)
                         AdvanceTradeRemote:FireServer()
+                        retries = retries + 1
+                        task.wait(0.6)
                     end
-                    isAdvancing = false
+                    isConfirming = false
                 end)
             end
         end
@@ -1596,6 +1708,8 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
         activeTradeData = nil
         isProcessingOffer = false
         isAdvancing = false
+        isConfirming = false
+        confirmPhaseStartTime = 0
         StatusBadge.Text = role:upper() .. " [IDLE]"
         StatusBadge.TextColor3 = THEME.Cyan
 
@@ -1616,13 +1730,31 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
         end
         return
     end
+end))
+
+-- Trade Watchdog: Anti-Stuck Countdown Recovery Loop (from Commit 29b5fa2)
+InstanceManager:Spawn(function()
+    while InstanceManager.IsAlive and task.wait(1) do
+        if inTradeSession and Config.Enabled and (Config.Settings and Config.Settings["Auto Loop Trade"]) then
+            local phase = activeTradeData and activeTradeData.phase
+            local ownAccepted = activeTradeData and activeTradeData.ownAccepted
+            
+            -- Anti-stuck for Confirm/Saving phase (server countdown is 3s)
+            if (phase == "Confirm" or phase == "Saving") and not ownAccepted then
+                local countdown = (TradeConfigModule and tonumber(TradeConfigModule.COUNTDOWN_DURATION)) or 3
+                if confirmPhaseStartTime > 0 and (tick() - confirmPhaseStartTime >= countdown + 0.8) then
+                    AdvanceTradeRemote:FireServer()
+                end
+            end
+        end
+    end
 end)
 
 -- Server Hop & Request Engine Loop
-task.spawn(function()
-    while task.wait(3) do
+InstanceManager:Spawn(function()
+    while InstanceManager.IsAlive and task.wait(3) do
         local loopOk, loopErr = pcall(function()
-            if not Config.Enabled then return end
+            if not Config.Enabled or not InstanceManager.IsAlive then return end
             local role = getRole()
 
             if role == "Receiver" then
@@ -1641,8 +1773,12 @@ task.spawn(function()
                     end
                 end
             else
+                pcall(function()
+                    SetTradeRequestsEnabledRemote:FireServer(true)
+                end)
+
                 if not inTradeSession and (Config.Settings and Config.Settings["Auto Loop Trade"]) then
-                    local recPlayer = Players:FindFirstChild(Config.Receiver)
+                    local recPlayer = findReceiverPlayer()
                     if not recPlayer then
                         -- Receiver TIDAK ADA di server ini: Prioritaskan mencari dan mengikuti server Receiver!
                         if not isHopping and Config.Hop and Config.Hop.Enabled then
