@@ -1240,6 +1240,8 @@ local activeTradeData = nil
 local isProcessingOffer = false
 local isAdvancing = false
 local isConfirming = false
+local tradeSessionStartTime = 0
+local lastReadyAttemptTime = 0
 local confirmPhaseStartTime = 0
 local lastRequestTime = 0
 local lastEmptyNoticeTime = 0
@@ -1586,6 +1588,8 @@ InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(ev
         isProcessingOffer = false
         isAdvancing = false
         isConfirming = false
+        tradeSessionStartTime = tick()
+        lastReadyAttemptTime = 0
         confirmPhaseStartTime = 0
 
         StatusBadge.Text = role:upper() .. " [TRADING]"
@@ -1661,6 +1665,7 @@ InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(ev
                 task.spawn(function()
                     task.wait(readyDelay)
                     if inTradeSession and activeTradeData and activeTradeData.phase == "Offer" and not activeTradeData.ownReady then
+                        lastReadyAttemptTime = tick()
                         addLog("Sender menekan READY...", THEME.Cyan)
                         AdvanceTradeRemote:FireServer()
                     end
@@ -1690,6 +1695,7 @@ InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(ev
                 task.spawn(function()
                     task.wait(0.5)
                     if inTradeSession and activeTradeData and activeTradeData.phase == "Offer" and not activeTradeData.ownReady then
+                        lastReadyAttemptTime = tick()
                         addLog("Receiver menekan READY...", THEME.Cyan)
                         AdvanceTradeRemote:FireServer()
                     end
@@ -1725,6 +1731,8 @@ InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(ev
         isProcessingOffer = false
         isAdvancing = false
         isConfirming = false
+        tradeSessionStartTime = 0
+        lastReadyAttemptTime = 0
         confirmPhaseStartTime = 0
         StatusBadge.Text = role:upper() .. " [IDLE]"
         StatusBadge.TextColor3 = THEME.Cyan
@@ -1748,19 +1756,48 @@ InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(ev
     end
 end))
 
--- Trade Watchdog: Anti-Stuck Countdown Recovery Loop (from Commit 29b5fa2)
+-- Trade Watchdog: Anti-Stuck & Auto-Recovery Loop (Ready, Confirm, & Session Timeout)
 InstanceManager:Spawn(function()
     while InstanceManager.IsAlive and task.wait(1) do
         if inTradeSession and Config.Enabled and (Config.Settings and Config.Settings["Auto Loop Trade"]) then
-            local phase = activeTradeData and activeTradeData.phase
+            local role = getRole()
+            local phase = activeTradeData and activeTradeData.phase or "Offer"
+            local ownReady = activeTradeData and activeTradeData.ownReady
             local ownAccepted = activeTradeData and activeTradeData.ownAccepted
+            local readyDelay = (Config.Settings and tonumber(Config.Settings["Ready Wait Time"])) or 1.0
+
+            -- 1. Anti-Stuck untuk Tombol READY (Offer Phase)
+            if phase == "Offer" and not ownReady and not isProcessingOffer then
+                local canRetryReady = false
+                if role == "Receiver" then
+                    if (tradeSessionStartTime > 0 and (tick() - tradeSessionStartTime >= 0.8)) and (tick() - lastReadyAttemptTime >= 1.5) then
+                        canRetryReady = true
+                    end
+                elseif role == "Sender" then
+                    if (tradeSessionStartTime > 0 and (tick() - tradeSessionStartTime >= readyDelay + 0.5)) and (tick() - lastReadyAttemptTime >= 1.5) then
+                        canRetryReady = true
+                    end
+                end
+
+                if canRetryReady then
+                    lastReadyAttemptTime = tick()
+                    addLog(string.format("[Watchdog] %s menekan ulang tombol READY...", role), THEME.Cyan)
+                    AdvanceTradeRemote:FireServer()
+                end
+            end
             
-            -- Anti-stuck for Confirm/Saving phase (server countdown is 3s)
+            -- 2. Anti-Stuck untuk Confirm/Saving phase (server countdown is 3s)
             if (phase == "Confirm" or phase == "Saving") and not ownAccepted then
                 local countdown = (TradeConfigModule and tonumber(TradeConfigModule.COUNTDOWN_DURATION)) or 3
                 if confirmPhaseStartTime > 0 and (tick() - confirmPhaseStartTime >= countdown + 0.8) then
                     AdvanceTradeRemote:FireServer()
                 end
+            end
+
+            -- 3. Anti-Stuck untuk Sesi Trade Keseluruhan: Jika macet > 40s (karena freeze/bug), batalkan untuk reset
+            if tradeSessionStartTime > 0 and (tick() - tradeSessionStartTime > 40) then
+                addLog("[Watchdog] Sesi trade macet > 40 detik! Membatalkan trade untuk recovery...", THEME.Red)
+                CancelTradeRemote:FireServer()
             end
         end
     end
