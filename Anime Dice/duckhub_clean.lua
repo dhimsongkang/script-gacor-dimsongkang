@@ -13,7 +13,7 @@ if _G.DuckHub_Instance then
     end)
 end
 
--- Force-disable any orphaned connections on TradeEventRemote from previous runs
+-- Ensure game's native TradeController connection remains ENABLED and restore if disabled
 pcall(function()
     if getconnections then
         local net = game:GetService("ReplicatedStorage"):FindFirstChild("Network")
@@ -22,7 +22,23 @@ pcall(function()
         local tradeEvent = re and re:FindFirstChild("TradeEvent")
         if tradeEvent then
             for _, conn in ipairs(getconnections(tradeEvent.OnClientEvent)) do
-                pcall(function() conn:Disable() end)
+                local isGameScript = false
+                pcall(function()
+                    if getinfo then
+                        local inf = getinfo(conn.Function)
+                        local src = tostring(inf.source or "")
+                        if string.find(src, "TradeController") or string.find(src, "Framework") then
+                            isGameScript = true
+                        end
+                    end
+                end)
+                if isGameScript then
+                    -- Re-enable game's native trading UI controller
+                    pcall(function() conn:Enable() end)
+                else
+                    -- Disable orphaned DuckHub connections from previous executions
+                    pcall(function() conn:Disable() end)
+                end
             end
         end
     end
