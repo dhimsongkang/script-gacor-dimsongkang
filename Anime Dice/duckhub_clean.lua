@@ -1155,6 +1155,8 @@ local activePartner = nil
 local activeTradeData = nil
 local isProcessingOffer = false
 local isAdvancing = false
+local isConfirming = false
+local confirmPhaseStartTime = 0
 local lastRequestTime = 0
 local lastEmptyNoticeTime = 0
 local scriptStartTime = tick()
@@ -1475,6 +1477,8 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
         activeTradeData = nil
         isProcessingOffer = false
         isAdvancing = false
+        isConfirming = false
+        confirmPhaseStartTime = 0
 
         StatusBadge.Text = role:upper() .. " [TRADING]"
         StatusBadge.TextColor3 = THEME.Green
@@ -1535,7 +1539,13 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
         local phase = payload and payload.phase or "Offer"
         local ownReady = payload and payload.ownReady or false
         local ownAccepted = payload and payload.ownAccepted or false
-        local readyDelay = (Config.Settings and Config.Settings["Ready Wait Time"]) or 1.0
+        local readyDelay = (Config.Settings and tonumber(Config.Settings["Ready Wait Time"])) or 1.0
+
+        if phase == "Confirm" or phase == "Saving" then
+            if confirmPhaseStartTime == 0 then
+                confirmPhaseStartTime = tick()
+            end
+        end
 
         if role == "Sender" and not isProcessingOffer then
             if phase == "Offer" and not ownReady and not isAdvancing then
@@ -1548,15 +1558,20 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
                     end
                     isAdvancing = false
                 end)
-            elseif (phase == "Confirm" or phase == "Saving") and not ownAccepted and not isAdvancing then
-                isAdvancing = true
+            elseif (phase == "Confirm" or phase == "Saving") and not ownAccepted and not isConfirming then
+                isConfirming = true
                 task.spawn(function()
-                    task.wait(readyDelay)
-                    if inTradeSession and activeTradeData and not activeTradeData.ownAccepted then
-                        addLog("Sender menekan CONFIRM ACCEPT...", THEME.Green)
+                    local countdown = (TradeConfigModule and tonumber(TradeConfigModule.COUNTDOWN_DURATION)) or 3
+                    local delayTime = countdown + 0.3 + math.max(0, readyDelay)
+                    task.wait(delayTime)
+                    local retries = 0
+                    while inTradeSession and activeTradeData and (activeTradeData.phase == "Confirm" or activeTradeData.phase == "Saving") and not activeTradeData.ownAccepted and retries < 15 do
+                        addLog(string.format("Sender menekan CONFIRM ACCEPT (attempt %d)...", retries + 1), THEME.Green)
                         AdvanceTradeRemote:FireServer()
+                        retries = retries + 1
+                        task.wait(0.6)
                     end
-                    isAdvancing = false
+                    isConfirming = false
                 end)
             end
         end
@@ -1572,15 +1587,20 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
                     end
                     isAdvancing = false
                 end)
-            elseif (phase == "Confirm" or phase == "Saving") and not ownAccepted and not isAdvancing then
-                isAdvancing = true
+            elseif (phase == "Confirm" or phase == "Saving") and not ownAccepted and not isConfirming then
+                isConfirming = true
                 task.spawn(function()
-                    task.wait(0.5)
-                    if inTradeSession and activeTradeData and not activeTradeData.ownAccepted then
-                        addLog("Receiver menekan CONFIRM...", THEME.Green)
+                    local countdown = (TradeConfigModule and tonumber(TradeConfigModule.COUNTDOWN_DURATION)) or 3
+                    local delayTime = countdown + 0.3 + math.max(0, readyDelay)
+                    task.wait(delayTime)
+                    local retries = 0
+                    while inTradeSession and activeTradeData and (activeTradeData.phase == "Confirm" or activeTradeData.phase == "Saving") and not activeTradeData.ownAccepted and retries < 15 do
+                        addLog(string.format("Receiver menekan CONFIRM ACCEPT (attempt %d)...", retries + 1), THEME.Green)
                         AdvanceTradeRemote:FireServer()
+                        retries = retries + 1
+                        task.wait(0.6)
                     end
-                    isAdvancing = false
+                    isConfirming = false
                 end)
             end
         end
@@ -1596,6 +1616,8 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
         activeTradeData = nil
         isProcessingOffer = false
         isAdvancing = false
+        isConfirming = false
+        confirmPhaseStartTime = 0
         StatusBadge.Text = role:upper() .. " [IDLE]"
         StatusBadge.TextColor3 = THEME.Cyan
 
@@ -1615,6 +1637,24 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
             end
         end
         return
+    end
+end)
+
+-- Trade Watchdog: Anti-Stuck Countdown Recovery Loop (from Commit 29b5fa2)
+task.spawn(function()
+    while task.wait(1) do
+        if inTradeSession and Config.Enabled and (Config.Settings and Config.Settings["Auto Loop Trade"]) then
+            local phase = activeTradeData and activeTradeData.phase
+            local ownAccepted = activeTradeData and activeTradeData.ownAccepted
+            
+            -- Anti-stuck for Confirm/Saving phase (server countdown is 3s)
+            if (phase == "Confirm" or phase == "Saving") and not ownAccepted then
+                local countdown = (TradeConfigModule and tonumber(TradeConfigModule.COUNTDOWN_DURATION)) or 3
+                if confirmPhaseStartTime > 0 and (tick() - confirmPhaseStartTime >= countdown + 0.8) then
+                    AdvanceTradeRemote:FireServer()
+                end
+            end
+        end
     end
 end)
 
