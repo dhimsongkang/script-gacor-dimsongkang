@@ -6,6 +6,74 @@
 
 repeat task.wait() until game:IsLoaded()
 
+-- Single-Instance Manager & Duplicate Prevention
+if _G.DuckHub_Instance then
+    pcall(function()
+        _G.DuckHub_Instance:Destroy()
+    end)
+end
+
+-- Force-disable any orphaned connections on TradeEventRemote from previous runs
+pcall(function()
+    if getconnections then
+        local net = game:GetService("ReplicatedStorage"):FindFirstChild("Network")
+        local tradeService = net and net:FindFirstChild("TradeService")
+        local re = tradeService and tradeService:FindFirstChild("RE")
+        local tradeEvent = re and re:FindFirstChild("TradeEvent")
+        if tradeEvent then
+            for _, conn in ipairs(getconnections(tradeEvent.OnClientEvent)) do
+                pcall(function() conn:Disable() end)
+            end
+        end
+    end
+end)
+
+local InstanceManager = {
+    Connections = {},
+    Threads = {},
+    IsAlive = true,
+}
+
+function InstanceManager:AddConnection(conn)
+    if conn then
+        table.insert(self.Connections, conn)
+    end
+    return conn
+end
+
+function InstanceManager:Spawn(fn)
+    local thread = task.spawn(fn)
+    table.insert(self.Threads, thread)
+    return thread
+end
+
+function InstanceManager:Destroy()
+    self.IsAlive = false
+    for _, conn in ipairs(self.Connections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    self.Connections = {}
+    for _, thread in ipairs(self.Threads) do
+        pcall(task.cancel, thread)
+    end
+    self.Threads = {}
+    pcall(function()
+        local coreGui = game:GetService("CoreGui")
+        local playerGui = game:GetService("Players").LocalPlayer and game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+        for _, p in ipairs({coreGui, playerGui}) do
+            if p then
+                for _, c in ipairs(p:GetChildren()) do
+                    if c.Name == "DuckHub_Trade_GUI" then
+                        c:Destroy()
+                    end
+                end
+            end
+        end
+    end)
+end
+
+_G.DuckHub_Instance = InstanceManager
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
@@ -657,12 +725,12 @@ local isHopping = false
 local lastHopAttemptTime = 0
 
 pcall(function()
-    TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
+    InstanceManager:AddConnection(TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
         if player == LocalPlayer then
             isHopping = false
             addLog("Teleport gagal: " .. tostring(errorMessage), THEME.Rose)
         end
-    end)
+    end))
 end)
 
 local function hopToLowestServer(isForced)
@@ -1437,8 +1505,8 @@ local function triggerFarmerV5Switch(reason)
 end
 
 -- Trade Network Events Hook
-TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
-    if not Config.Enabled then return end
+InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
+    if not InstanceManager.IsAlive or not Config.Enabled then return end
     local role = getRole()
 
     if eventType == "RequestReceived" then
@@ -1638,11 +1706,11 @@ TradeEventRemote.OnClientEvent:Connect(function(eventType, payload)
         end
         return
     end
-end)
+end))
 
 -- Trade Watchdog: Anti-Stuck Countdown Recovery Loop (from Commit 29b5fa2)
-task.spawn(function()
-    while task.wait(1) do
+InstanceManager:Spawn(function()
+    while InstanceManager.IsAlive and task.wait(1) do
         if inTradeSession and Config.Enabled and (Config.Settings and Config.Settings["Auto Loop Trade"]) then
             local phase = activeTradeData and activeTradeData.phase
             local ownAccepted = activeTradeData and activeTradeData.ownAccepted
@@ -1659,10 +1727,10 @@ task.spawn(function()
 end)
 
 -- Server Hop & Request Engine Loop
-task.spawn(function()
-    while task.wait(3) do
+InstanceManager:Spawn(function()
+    while InstanceManager.IsAlive and task.wait(3) do
         local loopOk, loopErr = pcall(function()
-            if not Config.Enabled then return end
+            if not Config.Enabled or not InstanceManager.IsAlive then return end
             local role = getRole()
 
             if role == "Receiver" then
