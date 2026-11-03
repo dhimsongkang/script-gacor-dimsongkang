@@ -144,6 +144,7 @@ local DEFAULT_CONFIG = {
     ["Tokens"] = {
         ["Gems"] = { ["Enabled"] = true, ["Keep Amount"] = 0 },
         ["Trait Reroll"] = { ["Enabled"] = true, ["Keep Amount"] = 0 },
+        ["Reset Token"] = { ["Enabled"] = true, ["Keep Amount"] = 0 },
     },
     ["Spins"] = {
         ["Lucky Spin"] = { ["Enabled"] = true, ["Keep Amount"] = 0 },
@@ -1327,30 +1328,49 @@ end
 do
     createToggle(TokensTab, "Transfer Gems", Config.Tokens.Gems.Enabled, function(val)
         Config.Tokens.Gems.Enabled = val
+        saveConfig()
     end)
     createTextInput(TokensTab, "Gems Keep Amount (Sisa Disimpan)", Config.Tokens.Gems["Keep Amount"], function(val)
         Config.Tokens.Gems["Keep Amount"] = tonumber(val) or 0
+        saveConfig()
     end)
 
     createToggle(TokensTab, "Transfer Trait Rerolls", Config.Tokens["Trait Reroll"].Enabled, function(val)
         Config.Tokens["Trait Reroll"].Enabled = val
+        saveConfig()
     end)
     createTextInput(TokensTab, "Trait Reroll Keep Amount", Config.Tokens["Trait Reroll"]["Keep Amount"], function(val)
         Config.Tokens["Trait Reroll"]["Keep Amount"] = tonumber(val) or 0
+        saveConfig()
+    end)
+
+    createToggle(TokensTab, "Transfer Reset Tokens (Quest)", (Config.Tokens["Reset Token"] and Config.Tokens["Reset Token"].Enabled ~= false), function(val)
+        if not Config.Tokens["Reset Token"] then Config.Tokens["Reset Token"] = { ["Enabled"] = true, ["Keep Amount"] = 0 } end
+        Config.Tokens["Reset Token"].Enabled = val
+        saveConfig()
+    end)
+    createTextInput(TokensTab, "Reset Token Keep Amount", (Config.Tokens["Reset Token"] and Config.Tokens["Reset Token"]["Keep Amount"]) or 0, function(val)
+        if not Config.Tokens["Reset Token"] then Config.Tokens["Reset Token"] = { ["Enabled"] = true, ["Keep Amount"] = 0 } end
+        Config.Tokens["Reset Token"]["Keep Amount"] = tonumber(val) or 0
+        saveConfig()
     end)
 
     createToggle(TokensTab, "Transfer Lucky Spins", Config.Spins["Lucky Spin"].Enabled, function(val)
         Config.Spins["Lucky Spin"].Enabled = val
+        saveConfig()
     end)
     createTextInput(TokensTab, "Lucky Spin Keep Amount", Config.Spins["Lucky Spin"]["Keep Amount"], function(val)
         Config.Spins["Lucky Spin"]["Keep Amount"] = tonumber(val) or 0
+        saveConfig()
     end)
 
     createToggle(TokensTab, "Transfer Jackpot Spins", Config.Spins["Jackpot Spin"].Enabled, function(val)
         Config.Spins["Jackpot Spin"].Enabled = val
+        saveConfig()
     end)
     createTextInput(TokensTab, "Jackpot Spin Keep Amount", Config.Spins["Jackpot Spin"]["Keep Amount"], function(val)
         Config.Spins["Jackpot Spin"]["Keep Amount"] = tonumber(val) or 0
+        saveConfig()
     end)
 end
 
