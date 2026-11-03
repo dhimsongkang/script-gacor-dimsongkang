@@ -211,7 +211,7 @@ local DEFAULT_CONFIG = {
     },
     ["Gear"] = {
         ["Enabled"] = true,
-        ["Keep Equipped"] = true,
+        ["Keep Equipped"] = false,
         ["Keep Amount"] = 0,
         ["Rarities"] = {
             ["Divine"] = true,
