@@ -74,9 +74,15 @@ function InstanceManager:Destroy()
     end
     self.Threads = {}
     pcall(function()
-        local coreGui = game:GetService("CoreGui")
-        local playerGui = game:GetService("Players").LocalPlayer and game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
-        for _, p in ipairs({coreGui, playerGui}) do
+        local targets = {game:GetService("CoreGui")}
+        if gethui then
+            pcall(function() table.insert(targets, gethui()) end)
+        end
+        local lp = game:GetService("Players").LocalPlayer
+        if lp and lp:FindFirstChild("PlayerGui") then
+            table.insert(targets, lp.PlayerGui)
+        end
+        for _, p in ipairs(targets) do
             if p then
                 for _, c in ipairs(p:GetChildren()) do
                     if c.Name == "DuckHub_Trade_GUI" then
@@ -144,10 +150,45 @@ local DEFAULT_CONFIG = {
         ["Jackpot Spin"] = { ["Enabled"] = true, ["Keep Amount"] = 0 },
     },
     ["Boosts"] = {
-        ["Enabled"] = false,
+        ["Enabled"] = true,
         ["Min Tier"] = 1,
-        ["Categories"] = { "Luck", "Damage", "Income", "Dragon Luck", "Dragon Income", "Dragon Damage", "Cursed Luck", "Cursed Damage", "Cursed Income", "Pirate Luck", "Pirate Damage", "Pirate Income", "Leaf Luck", "Leaf Damage", "Leaf Income", "Slayer Luck", "Slayer Damage", "Slayer Income" },
-        ["Keep Amount"] = 0
+        ["Keep Amount"] = 0,
+        ["Selected Categories"] = {
+            ["Soul Luck"] = true,
+            ["Soul Damage"] = true,
+            ["Soul Income"] = true,
+            ["Shadow Luck"] = true,
+            ["Shadow Speed"] = true,
+            ["Shadow Income"] = true,
+            ["Slayer Luck"] = true,
+            ["Slayer Damage"] = true,
+            ["Slayer Income"] = true,
+            ["Leaf Luck"] = true,
+            ["Leaf Damage"] = true,
+            ["Leaf Income"] = true,
+            ["Pirate Luck"] = true,
+            ["Pirate Damage"] = true,
+            ["Pirate Income"] = true,
+            ["Cursed Luck"] = true,
+            ["Cursed Damage"] = true,
+            ["Cursed Income"] = true,
+            ["Dragon Luck"] = true,
+            ["Dragon Damage"] = true,
+            ["Dragon Income"] = true,
+            ["Luck"] = true,
+            ["Damage"] = true,
+            ["Income"] = true,
+        },
+        ["Categories"] = {
+            "Soul Luck", "Soul Damage", "Soul Income",
+            "Shadow Luck", "Shadow Speed", "Shadow Income",
+            "Slayer Luck", "Slayer Damage", "Slayer Income",
+            "Leaf Luck", "Leaf Damage", "Leaf Income",
+            "Pirate Luck", "Pirate Damage", "Pirate Income",
+            "Cursed Luck", "Cursed Damage", "Cursed Income",
+            "Dragon Luck", "Dragon Damage", "Dragon Income",
+            "Luck", "Damage", "Income"
+        }
     },
     ["Gear"] = {
         ["Enabled"] = false,
@@ -336,10 +377,22 @@ end
 
 -- Destroy old UI if exists
 pcall(function()
-    local old = game:GetService("CoreGui"):FindFirstChild("DuckHub_Trade_GUI")
-    if old then old:Destroy() end
-    local old2 = LocalPlayer:FindFirstChild("PlayerGui") and LocalPlayer.PlayerGui:FindFirstChild("DuckHub_Trade_GUI")
-    if old2 then old2:Destroy() end
+    local targets = {game:GetService("CoreGui")}
+    if gethui then
+        pcall(function() table.insert(targets, gethui()) end)
+    end
+    if LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui") then
+        table.insert(targets, LocalPlayer.PlayerGui)
+    end
+    for _, p in ipairs(targets) do
+        if p then
+            for _, c in ipairs(p:GetChildren()) do
+                if c.Name == "DuckHub_Trade_GUI" then
+                    c:Destroy()
+                end
+            end
+        end
+    end
 end)
 
 local ScreenGui = Instance.new("ScreenGui")
@@ -585,12 +638,12 @@ local function createTab(tabId, tabName)
 
     local btn = Instance.new("TextButton")
     btn.Name = tabId .. "Btn"
-    btn.Size = UDim2.new(0, 105, 1, -6)
+    btn.Size = UDim2.new(0, 86, 1, -6)
     btn.BackgroundColor3 = THEME.Bg
     btn.BackgroundTransparency = 1
     btn.TextColor3 = THEME.TextMuted
     btn.Font = Enum.Font.GothamMedium
-    btn.TextSize = 12
+    btn.TextSize = 11
     btn.Text = tabName
     btn.AutoButtonColor = false
     btn.Parent = TabBar
@@ -706,6 +759,44 @@ local function createTextInput(parent, labelText, defaultVal, callback)
         saveConfig()
     end)
     return card
+end
+
+local function createSectionHeader(parent, headerText, subtitle)
+    local header = Instance.new("Frame")
+    header.Size = UDim2.new(1, 0, 0, subtitle and 38 or 28)
+    header.BackgroundColor3 = THEME.Card
+    header.BorderSizePixel = 0
+    header.Parent = parent
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = header
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -16, 0, 18)
+    lbl.Position = UDim2.new(0, 10, 0, subtitle and 4 or 5)
+    lbl.BackgroundTransparency = 1
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 12
+    lbl.TextColor3 = THEME.Accent
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Text = headerText
+    lbl.Parent = header
+
+    if subtitle then
+        local sub = Instance.new("TextLabel")
+        sub.Size = UDim2.new(1, -16, 0, 14)
+        sub.Position = UDim2.new(0, 10, 0, 20)
+        sub.BackgroundTransparency = 1
+        sub.Font = Enum.Font.Gotham
+        sub.TextSize = 10
+        sub.TextColor3 = THEME.TextMuted
+        sub.TextXAlignment = Enum.TextXAlignment.Left
+        sub.Text = subtitle
+        sub.Parent = header
+    end
+
+    return header
 end
 
 local function createButton(parent, labelText, btnColor, callback)
@@ -1109,6 +1200,7 @@ end)
 local DashTab = createTab("Dash", "Dashboard")
 local UnitsTab = createTab("Units", "Units")
 local TokensTab = createTab("Tokens", "Tokens/Spins")
+local PotionsTab = createTab("Potions", "Potions")
 local SettingsTab = createTab("Settings", "Settings/Hop")
 local LogsTab = createTab("Logs", "Logs")
 
@@ -1222,7 +1314,205 @@ do
     end)
 end
 
--- 4.4 Settings & Hop Tab
+-- 4.4 Potions Tab (Tower Potions / Boosts)
+do
+    createToggle(PotionsTab, "⚡ Transfer Potions / Boosts (Master Enable)", Config.Boosts.Enabled, function(val)
+        Config.Boosts.Enabled = val
+        if val then
+            addLog("Transfer Potions diaktifkan.", THEME.Green)
+        else
+            addLog("Transfer Potions dinonaktifkan.", THEME.TextMuted)
+        end
+    end)
+
+    createTextInput(PotionsTab, "Min Tier Potion (1 = Tier I, 2 = II, 3 = III, 4 = IV)", Config.Boosts["Min Tier"] or 1, function(val)
+        Config.Boosts["Min Tier"] = tonumber(val) or 1
+    end)
+
+    createTextInput(PotionsTab, "Potion Keep Amount (Sisa Disimpan Tiap Jenis)", Config.Boosts["Keep Amount"] or 0, function(val)
+        Config.Boosts["Keep Amount"] = tonumber(val) or 0
+    end)
+
+    -- Quick Action Buttons
+    local actionRow = Instance.new("Frame")
+    actionRow.Size = UDim2.new(1, 0, 0, 32)
+    actionRow.BackgroundTransparency = 1
+    actionRow.Parent = PotionsTab
+
+    local rowLayout = Instance.new("UIListLayout")
+    rowLayout.FillDirection = Enum.FillDirection.Horizontal
+    rowLayout.Padding = UDim.new(0, 8)
+    rowLayout.Parent = actionRow
+
+    local selectAllBtn = Instance.new("TextButton")
+    selectAllBtn.Size = UDim2.new(0.5, -4, 1, 0)
+    selectAllBtn.BackgroundColor3 = THEME.Cyan
+    selectAllBtn.Font = Enum.Font.GothamBold
+    selectAllBtn.TextSize = 11
+    selectAllBtn.TextColor3 = THEME.Bg
+    selectAllBtn.Text = "✅ Centang Semua (Select All)"
+    selectAllBtn.AutoButtonColor = false
+    selectAllBtn.Parent = actionRow
+
+    local selectAllCorner = Instance.new("UICorner")
+    selectAllCorner.CornerRadius = UDim.new(0, 6)
+    selectAllCorner.Parent = selectAllBtn
+
+    local deselectAllBtn = Instance.new("TextButton")
+    deselectAllBtn.Size = UDim2.new(0.5, -4, 1, 0)
+    deselectAllBtn.BackgroundColor3 = THEME.Card
+    deselectAllBtn.Font = Enum.Font.GothamBold
+    deselectAllBtn.TextSize = 11
+    deselectAllBtn.TextColor3 = THEME.TextMuted
+    deselectAllBtn.Text = "❌ Hapus Semua (Deselect All)"
+    deselectAllBtn.AutoButtonColor = false
+    deselectAllBtn.Parent = actionRow
+
+    local deselectAllCorner = Instance.new("UICorner")
+    deselectAllCorner.CornerRadius = UDim.new(0, 6)
+    deselectAllCorner.Parent = deselectAllBtn
+
+    local potionToggleCallbacks = {}
+
+    selectAllBtn.MouseButton1Click:Connect(function()
+        if not Config.Boosts["Selected Categories"] then Config.Boosts["Selected Categories"] = {} end
+        for _, cat in ipairs(Config.Boosts.Categories or {}) do
+            Config.Boosts["Selected Categories"][cat] = true
+            if potionToggleCallbacks[cat] then
+                potionToggleCallbacks[cat](true)
+            end
+        end
+        saveConfig()
+        addLog("Semua jenis potion tower dicentang (aktif).", THEME.Green)
+    end)
+
+    deselectAllBtn.MouseButton1Click:Connect(function()
+        if not Config.Boosts["Selected Categories"] then Config.Boosts["Selected Categories"] = {} end
+        for _, cat in ipairs(Config.Boosts.Categories or {}) do
+            Config.Boosts["Selected Categories"][cat] = false
+            if potionToggleCallbacks[cat] then
+                potionToggleCallbacks[cat](false)
+            end
+        end
+        saveConfig()
+        addLog("Semua pilihan potion tower dikosongkan.", THEME.Yellow)
+    end)
+
+    local towerGroups = {
+        {
+            title = "👑 SOUL TOWER (Godly)",
+            subtitle = "Tier I - IV: Soul Luck, Soul Damage, Soul Income",
+            potions = { "Soul Luck", "Soul Damage", "Soul Income" }
+        },
+        {
+            title = "🌌 SHADOW TOWER (Abyssal)",
+            subtitle = "Tier I - IV: Shadow Luck, Shadow Speed, Shadow Income",
+            potions = { "Shadow Luck", "Shadow Speed", "Shadow Income" }
+        },
+        {
+            title = "⚔️ SLAYER TOWER (Nightmare)",
+            subtitle = "Tier I - III: Slayer Luck, Slayer Damage, Slayer Income",
+            potions = { "Slayer Luck", "Slayer Damage", "Slayer Income" }
+        },
+        {
+            title = "🍃 HIDDEN LEAF TOWER (Extreme)",
+            subtitle = "Tier I - III: Leaf Luck, Leaf Damage, Leaf Income",
+            potions = { "Leaf Luck", "Leaf Damage", "Leaf Income" }
+        },
+        {
+            title = "🏴‍☠️ PIRATE TOWER (Hard)",
+            subtitle = "Tier I - III: Pirate Luck, Pirate Damage, Pirate Income",
+            potions = { "Pirate Luck", "Pirate Damage", "Pirate Income" }
+        },
+        {
+            title = "🔮 CURSED TOWER (Medium)",
+            subtitle = "Tier I - III: Cursed Luck, Cursed Damage, Cursed Income",
+            potions = { "Cursed Luck", "Cursed Damage", "Cursed Income" }
+        },
+        {
+            title = "🐉 DRAGON TOWER (Easy)",
+            subtitle = "Tier I - III: Dragon Luck, Dragon Damage, Dragon Income",
+            potions = { "Dragon Luck", "Dragon Damage", "Dragon Income" }
+        },
+        {
+            title = "♾️ INFINITY TOWER (Infinity)",
+            subtitle = "Tier I - IV: General Luck, Damage, Income",
+            potions = { "Luck", "Damage", "Income" }
+        }
+    }
+
+    local function addPotionToggle(parent, catName, displayName)
+        local initialVal = true
+        if Config.Boosts["Selected Categories"] and Config.Boosts["Selected Categories"][catName] ~= nil then
+            initialVal = Config.Boosts["Selected Categories"][catName]
+        end
+
+        local card = Instance.new("Frame")
+        card.Size = UDim2.new(1, 0, 0, 34)
+        card.BackgroundColor3 = THEME.Card
+        card.BorderSizePixel = 0
+        card.Parent = parent
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 6)
+        corner.Parent = card
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -70, 1, 0)
+        lbl.Position = UDim2.new(0, 12, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 12
+        lbl.TextColor3 = THEME.Text
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Text = displayName or ("Transfer " .. catName)
+        lbl.Parent = card
+
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 48, 0, 22)
+        btn.Position = UDim2.new(1, -58, 0.5, -11)
+        btn.BackgroundColor3 = initialVal and THEME.Green or THEME.Border
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 11
+        btn.TextColor3 = initialVal and THEME.Bg or THEME.TextMuted
+        btn.Text = initialVal and "ON" or "OFF"
+        btn.AutoButtonColor = false
+        btn.Parent = card
+
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.CornerRadius = UDim.new(0, 11)
+        btnCorner.Parent = btn
+
+        local curState = initialVal
+        local function setVisualState(newState)
+            curState = newState
+            btn.BackgroundColor3 = curState and THEME.Green or THEME.Border
+            btn.TextColor3 = curState and THEME.Bg or THEME.TextMuted
+            btn.Text = curState and "ON" or "OFF"
+        end
+
+        potionToggleCallbacks[catName] = setVisualState
+
+        btn.MouseButton1Click:Connect(function()
+            curState = not curState
+            setVisualState(curState)
+            if not Config.Boosts["Selected Categories"] then
+                Config.Boosts["Selected Categories"] = {}
+            end
+            Config.Boosts["Selected Categories"][catName] = curState
+            saveConfig()
+        end)
+    end
+
+    for _, group in ipairs(towerGroups) do
+        createSectionHeader(PotionsTab, group.title, group.subtitle)
+        for _, pCat in ipairs(group.potions) do
+            addPotionToggle(PotionsTab, pCat, "Transfer " .. pCat)
+        end
+    end
+end
+
+-- 4.5 Settings & Hop Tab
 do
     createToggle(SettingsTab, "Stop Trade Saat Kosong (Hentikan Jika Habis)", Config.Settings["Stop When Empty"], function(val)
         Config.Settings["Stop When Empty"] = val
@@ -1544,7 +1834,16 @@ local function getEligibleBoosts()
                 local cat = entryConfig.category or ""
                 local tier = tonumber(entryConfig.tier) or 1
                 local minTier = tonumber(Config.Boosts["Min Tier"]) or 1
-                local catAllowed = table.find(Config.Boosts.Categories or {}, cat) ~= nil
+                local catAllowed = false
+                if Config.Boosts["Selected Categories"] and type(Config.Boosts["Selected Categories"]) == "table" then
+                    if Config.Boosts["Selected Categories"][cat] ~= nil then
+                        catAllowed = Config.Boosts["Selected Categories"][cat] == true
+                    else
+                        catAllowed = table.find(Config.Boosts.Categories or {}, cat) ~= nil
+                    end
+                else
+                    catAllowed = table.find(Config.Boosts.Categories or {}, cat) ~= nil
+                end
 
                 if catAllowed and tier >= minTier then
                     local keep = tonumber(Config.Boosts["Keep Amount"]) or 0
