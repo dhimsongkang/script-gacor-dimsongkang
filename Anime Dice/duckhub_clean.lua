@@ -163,6 +163,7 @@ local DEFAULT_CONFIG = {
         ["Stop When Empty"] = true,
         ["Offer Delay"] = 0.3,
         ["Ready Wait Time"] = 1.0,
+        ["Anti AFK"] = true,
     },
     ["Hop"] = {
         ["Enabled"] = true,
@@ -957,6 +958,152 @@ local function followReceiverFriend()
 end
 
 -- ====================================================================
+-- 3.5 Multi-Layer Anti-AFK System (Pure Silent Keep-Alive from HipHub)
+-- ====================================================================
+local function purgeGameAfkScript()
+    pcall(function()
+        local ps = LocalPlayer and LocalPlayer:FindFirstChild("PlayerScripts")
+        if ps then
+            for _, ch in ipairs(ps:GetChildren()) do
+                if ch:IsA("LocalScript") and (ch.Name == "AFK" or string.find(string.lower(ch.Name), "afk")) then
+                    ch:Destroy()
+                end
+            end
+        end
+    end)
+end
+
+local function hookTeleportAndKick()
+    pcall(function()
+        if typeof(hookfunction) == "function" then
+            pcall(function()
+                local oldTeleport
+                oldTeleport = hookfunction(TeleportService.Teleport, function(self, placeId, ...)
+                    if Config.Settings and Config.Settings["Anti AFK"] and self == TeleportService and (placeId == game.PlaceId or placeId == nil) then
+                        return nil
+                    end
+                    return oldTeleport(self, placeId, ...)
+                end)
+            end)
+            pcall(function()
+                local oldKick
+                oldKick = hookfunction(LocalPlayer.Kick, function(self, message, ...)
+                    if Config.Settings and Config.Settings["Anti AFK"] and self == LocalPlayer then
+                        local msg = tostring(message or ""):lower()
+                        if msg:find("afk") or msg:find("idle") or msg:find("inactive") or msg == "" then
+                            return nil
+                        end
+                    end
+                    return oldKick(self, message, ...)
+                end)
+            end)
+        end
+    end)
+
+    pcall(function()
+        if typeof(hookmetamethod) == "function" then
+            local oldNamecall
+            oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+                local method = getnamecallmethod()
+                if Config.Settings and Config.Settings["Anti AFK"] then
+                    if method == "Teleport" and self == TeleportService then
+                        local args = { ... }
+                        if args[1] == game.PlaceId or args[1] == nil then
+                            return nil
+                        end
+                    elseif (method == "Kick" or method == "kick") and self == LocalPlayer then
+                        local args = { ... }
+                        local msg = tostring(args[1] or ""):lower()
+                        if msg:find("afk") or msg:find("idle") or msg:find("inactive") or msg == "" then
+                            return nil
+                        end
+                    end
+                end
+                return oldNamecall(self, ...)
+            end)
+        end
+    end)
+end
+
+pcall(hookTeleportAndKick)
+
+local function disableIdleConnections()
+    pcall(function()
+        local getconns = rawget(_G, "getconnections") or rawget(_G, "get_signal_cons")
+            or (type(getconnections) == "function" and getconnections)
+
+        if getconns and LocalPlayer then
+            for _, conn in pairs(getconns(LocalPlayer.Idled)) do
+                pcall(function()
+                    if conn.Disable then
+                        conn:Disable()
+                    elseif conn.Disconnect then
+                        conn:Disconnect()
+                    end
+                    if conn.Enabled ~= nil then
+                        conn.Enabled = false
+                    end
+                end)
+            end
+        end
+    end)
+end
+
+local function runAntiAfkCycle()
+    purgeGameAfkScript()
+    disableIdleConnections()
+end
+
+local function applyAntiAfkState(enabled)
+    if enabled then
+        pcall(function() LocalPlayer:SetAttribute("AntiAfkIdleOverride", 99999999) end)
+        runAntiAfkCycle()
+    else
+        pcall(function() LocalPlayer:SetAttribute("AntiAfkIdleOverride", nil) end)
+    end
+end
+
+if Config.Settings and Config.Settings["Anti AFK"] then
+    applyAntiAfkState(true)
+end
+
+-- Listener Idled event: Reset idle counter & VirtualUser fallback
+InstanceManager:AddConnection(LocalPlayer.Idled:Connect(function()
+    if Config.Settings and Config.Settings["Anti AFK"] then
+        runAntiAfkCycle()
+        pcall(function()
+            local vu = game:GetService("VirtualUser")
+            vu:CaptureController()
+            vu:ClickButton2(Vector2.new())
+        end)
+        addLog("Anti-AFK: Berhasil mereset status idle (Keep-Alive).", THEME.TextSecondary)
+    end
+end))
+
+-- Watchdog script AFK yang di-insert runtime
+pcall(function()
+    local ps = LocalPlayer:WaitForChild("PlayerScripts", 10)
+    if ps then
+        InstanceManager:AddConnection(ps.ChildAdded:Connect(function(child)
+            if Config.Settings and Config.Settings["Anti AFK"] and child:IsA("LocalScript") and (child.Name == "AFK" or string.find(string.lower(child.Name), "afk")) then
+                task.defer(function()
+                    pcall(function() child:Destroy() end)
+                end)
+            end
+        end))
+    end
+end)
+
+-- Background loop keep-alive cycle setiap 15 detik
+InstanceManager:Spawn(function()
+    while InstanceManager.IsAlive and task.wait(15) do
+        if Config.Settings and Config.Settings["Anti AFK"] then
+            runAntiAfkCycle()
+        end
+    end
+end)
+
+-- ====================================================================
 -- 4. Population of UI Tabs
 -- ====================================================================
 local DashTab = createTab("Dash", "Dashboard")
@@ -1079,6 +1226,17 @@ end
 do
     createToggle(SettingsTab, "Stop Trade Saat Kosong (Hentikan Jika Habis)", Config.Settings["Stop When Empty"], function(val)
         Config.Settings["Stop When Empty"] = val
+    end)
+
+    createToggle(SettingsTab, "Anti-AFK (Multi-Layer & Keep Alive)", Config.Settings["Anti AFK"] ~= false, function(val)
+        Config.Settings["Anti AFK"] = val
+        applyAntiAfkState(val)
+        if val then
+            addLog("Anti-AFK diaktifkan (Pure silent keep-alive).", THEME.Green)
+        else
+            addLog("Anti-AFK dinonaktifkan.", THEME.TextMuted)
+        end
+        saveConfig()
     end)
 
     createTextInput(SettingsTab, "Offer Delay (detik per unit)", Config.Settings["Offer Delay"], function(val)
