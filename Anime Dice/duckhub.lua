@@ -191,13 +191,52 @@ local DEFAULT_CONFIG = {
         }
     },
     ["Gear"] = {
-        ["Enabled"] = false,
-        ["Mode"] = "Rarity",
-        ["Rarities"] = { ["Divine"] = true, ["Legendary"] = true, ["Rare"] = false },
-        ["Slots"] = { ["Head"] = true, ["Torso"] = true, ["Back"] = true, ["Upper"] = true, ["Waist"] = true },
-        ["Whitelist Gear"] = {},
+        ["Enabled"] = true,
         ["Keep Equipped"] = true,
         ["Keep Amount"] = 0,
+        ["Rarities"] = {
+            ["Divine"] = true,
+            ["Haunted"] = true,
+            ["Legendary"] = true,
+            ["Rare"] = true
+        },
+        ["Slots"] = {
+            ["Back"] = true,
+            ["Head"] = true,
+            ["Torso"] = true,
+            ["Upper"] = true,
+            ["Waist"] = true
+        },
+        ["Selected Gears"] = {
+            ["Enol's Drums"] = true,
+            ["Reaper's Scythe"] = true,
+            ["Vampire Cape"] = true,
+            ["Ichiga's Zangetsu"] = true,
+            ["Jogu's Robe"] = true,
+            ["Obita's War Fan"] = true,
+            ["Pikolo's Cape"] = true,
+            ["Shizui's Tanto"] = true,
+            ["Igras's Helm"] = true,
+            ["Obita's Mask"] = true,
+            ["Pumpkin Head"] = true,
+            ["Golden Hair"] = true,
+            ["Nezuka's Bamboo"] = true,
+            ["Ulquiro's Mask"] = true,
+            ["Usop's Hat"] = true,
+            ["Mazun's Coat"] = true,
+            ["Mummy Wraps"] = true,
+            ["Monarch's Coat"] = true,
+            ["Todoh's Vest"] = true,
+            ["Angel's Halo"] = true,
+            ["Ghost Wisps"] = true,
+            ["Aizan's Katana"] = true,
+            ["Sakuna's Sash"] = true,
+            ["Candy Bucket"] = true,
+            ["Tanjuro's Katana"] = true,
+            ["Zaro's Swords"] = true,
+            ["Jinwoo's Daggers"] = true
+        },
+        ["Whitelist Gear"] = {}
     },
     ["Settings"] = {
         ["Auto Loop Trade"] = true,
@@ -478,8 +517,8 @@ end
 -- 3.2 Main Window
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 580, 0, 420)
-MainFrame.Position = UDim2.new(0.5, -290, 0.5, -210)
+MainFrame.Size = UDim2.new(0, 620, 0, 420)
+MainFrame.Position = UDim2.new(0.5, -310, 0.5, -210)
 MainFrame.BackgroundColor3 = THEME.Bg
 MainFrame.BorderSizePixel = 0
 MainFrame.ClipsDescendants = true
@@ -638,7 +677,7 @@ local function createTab(tabId, tabName)
 
     local btn = Instance.new("TextButton")
     btn.Name = tabId .. "Btn"
-    btn.Size = UDim2.new(0, 86, 1, -6)
+    btn.Size = UDim2.new(0, 76, 1, -6)
     btn.BackgroundColor3 = THEME.Bg
     btn.BackgroundTransparency = 1
     btn.TextColor3 = THEME.TextMuted
@@ -1201,6 +1240,7 @@ local DashTab = createTab("Dash", "Dashboard")
 local UnitsTab = createTab("Units", "Units")
 local TokensTab = createTab("Tokens", "Tokens/Spins")
 local PotionsTab = createTab("Potions", "Potions")
+local GearTab = createTab("Gear", "Gear")
 local SettingsTab = createTab("Settings", "Settings/Hop")
 local LogsTab = createTab("Logs", "Logs")
 
@@ -1512,7 +1552,360 @@ do
     end
 end
 
--- 4.5 Settings & Hop Tab
+-- 4.5 Gear Tab
+do
+    createToggle(GearTab, "⚡ Transfer Gear (Master Enable)", Config.Gear.Enabled, function(val)
+        Config.Gear.Enabled = val
+        if val then
+            addLog("Transfer Gear diaktifkan.", THEME.Green)
+        else
+            addLog("Transfer Gear dinonaktifkan.", THEME.TextMuted)
+        end
+        saveConfig()
+    end)
+
+    createToggle(GearTab, "🛡️ Keep Equipped Gear (Jangan Trade Gear yang Dipakai)", Config.Gear["Keep Equipped"], function(val)
+        Config.Gear["Keep Equipped"] = val
+        saveConfig()
+    end)
+
+    createTextInput(GearTab, "Keep Amount (Sisakan Tiap Gear di Tas)", Config.Gear["Keep Amount"] or 0, function(val)
+        Config.Gear["Keep Amount"] = tonumber(val) or 0
+        saveConfig()
+    end)
+
+    createSectionHeader(GearTab, "⭐ FILTER GEAR BERDASARKAN RARITY", "Aktifkan/nonaktifkan rarity gear yang ingin ditransfer")
+
+    local gearRarityCallbacks = {}
+    local function addGearRarityToggle(parent, rarityName)
+        local initialVal = true
+        if Config.Gear.Rarities and Config.Gear.Rarities[rarityName] ~= nil then
+            initialVal = Config.Gear.Rarities[rarityName]
+        end
+
+        local card = Instance.new("Frame")
+        card.Size = UDim2.new(1, 0, 0, 34)
+        card.BackgroundColor3 = THEME.Card
+        card.BorderSizePixel = 0
+        card.Parent = parent
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 6)
+        corner.Parent = card
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -70, 1, 0)
+        lbl.Position = UDim2.new(0, 12, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 12
+        lbl.TextColor3 = THEME.Text
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Text = "Transfer Rarity: " .. rarityName
+        lbl.Parent = card
+
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 48, 0, 22)
+        btn.Position = UDim2.new(1, -58, 0.5, -11)
+        btn.BackgroundColor3 = initialVal and THEME.Green or THEME.Border
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 11
+        btn.TextColor3 = initialVal and THEME.Bg or THEME.TextMuted
+        btn.Text = initialVal and "ON" or "OFF"
+        btn.AutoButtonColor = false
+        btn.Parent = card
+
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.CornerRadius = UDim.new(0, 11)
+        btnCorner.Parent = btn
+
+        local curState = initialVal
+        local function setVisualState(newState)
+            curState = newState
+            btn.BackgroundColor3 = curState and THEME.Green or THEME.Border
+            btn.TextColor3 = curState and THEME.Bg or THEME.TextMuted
+            btn.Text = curState and "ON" or "OFF"
+        end
+
+        gearRarityCallbacks[rarityName] = setVisualState
+
+        btn.MouseButton1Click:Connect(function()
+            curState = not curState
+            setVisualState(curState)
+            if not Config.Gear.Rarities then Config.Gear.Rarities = {} end
+            Config.Gear.Rarities[rarityName] = curState
+            saveConfig()
+        end)
+    end
+
+    for _, rName in ipairs({ "Divine", "Haunted", "Legendary", "Rare" }) do
+        addGearRarityToggle(GearTab, rName)
+    end
+
+    createSectionHeader(GearTab, "🎽 FILTER GEAR BERDASARKAN SLOT", "Aktifkan/nonaktifkan slot gear yang ingin ditransfer")
+
+    local gearSlotCallbacks = {}
+    local function addGearSlotToggle(parent, slotName)
+        local initialVal = true
+        if Config.Gear.Slots and Config.Gear.Slots[slotName] ~= nil then
+            initialVal = Config.Gear.Slots[slotName]
+        end
+
+        local card = Instance.new("Frame")
+        card.Size = UDim2.new(1, 0, 0, 34)
+        card.BackgroundColor3 = THEME.Card
+        card.BorderSizePixel = 0
+        card.Parent = parent
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 6)
+        corner.Parent = card
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -70, 1, 0)
+        lbl.Position = UDim2.new(0, 12, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 12
+        lbl.TextColor3 = THEME.Text
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Text = "Transfer Slot: " .. slotName
+        lbl.Parent = card
+
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 48, 0, 22)
+        btn.Position = UDim2.new(1, -58, 0.5, -11)
+        btn.BackgroundColor3 = initialVal and THEME.Green or THEME.Border
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 11
+        btn.TextColor3 = initialVal and THEME.Bg or THEME.TextMuted
+        btn.Text = initialVal and "ON" or "OFF"
+        btn.AutoButtonColor = false
+        btn.Parent = card
+
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.CornerRadius = UDim.new(0, 11)
+        btnCorner.Parent = btn
+
+        local curState = initialVal
+        local function setVisualState(newState)
+            curState = newState
+            btn.BackgroundColor3 = curState and THEME.Green or THEME.Border
+            btn.TextColor3 = curState and THEME.Bg or THEME.TextMuted
+            btn.Text = curState and "ON" or "OFF"
+        end
+
+        gearSlotCallbacks[slotName] = setVisualState
+
+        btn.MouseButton1Click:Connect(function()
+            curState = not curState
+            setVisualState(curState)
+            if not Config.Gear.Slots then Config.Gear.Slots = {} end
+            Config.Gear.Slots[slotName] = curState
+            saveConfig()
+        end)
+    end
+
+    for _, sName in ipairs({ "Back", "Head", "Torso", "Upper", "Waist" }) do
+        addGearSlotToggle(GearTab, sName)
+    end
+
+    -- Quick Action Buttons for Gears
+    local gearActionsFrame = Instance.new("Frame")
+    gearActionsFrame.Size = UDim2.new(1, 0, 0, 36)
+    gearActionsFrame.BackgroundTransparency = 1
+    gearActionsFrame.Parent = GearTab
+
+    local gearActionsLayout = Instance.new("UIListLayout")
+    gearActionsLayout.FillDirection = Enum.FillDirection.Horizontal
+    gearActionsLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    gearActionsLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    gearActionsLayout.Padding = UDim.new(0, 10)
+    gearActionsLayout.Parent = gearActionsFrame
+
+    local selectAllGearBtn = Instance.new("TextButton")
+    selectAllGearBtn.Size = UDim2.new(0.5, -5, 1, 0)
+    selectAllGearBtn.BackgroundColor3 = THEME.Card
+    selectAllGearBtn.Font = Enum.Font.GothamBold
+    selectAllGearBtn.TextSize = 11
+    selectAllGearBtn.TextColor3 = THEME.Green
+    selectAllGearBtn.Text = "✅ Select All Gears"
+    selectAllGearBtn.AutoButtonColor = false
+    selectAllGearBtn.Parent = gearActionsFrame
+    local sagCorner = Instance.new("UICorner")
+    sagCorner.CornerRadius = UDim.new(0, 6)
+    sagCorner.Parent = selectAllGearBtn
+
+    local deselectAllGearBtn = Instance.new("TextButton")
+    deselectAllGearBtn.Size = UDim2.new(0.5, -5, 1, 0)
+    deselectAllGearBtn.BackgroundColor3 = THEME.Card
+    deselectAllGearBtn.Font = Enum.Font.GothamBold
+    deselectAllGearBtn.TextSize = 11
+    deselectAllGearBtn.TextColor3 = THEME.Red
+    deselectAllGearBtn.Text = "❌ Deselect All Gears"
+    deselectAllGearBtn.AutoButtonColor = false
+    deselectAllGearBtn.Parent = gearActionsFrame
+    local dagCorner = Instance.new("UICorner")
+    dagCorner.CornerRadius = UDim.new(0, 6)
+    dagCorner.Parent = deselectAllGearBtn
+
+    local individualGearCallbacks = {}
+
+    selectAllGearBtn.MouseButton1Click:Connect(function()
+        if not Config.Gear["Selected Gears"] then Config.Gear["Selected Gears"] = {} end
+        for gName, cb in pairs(individualGearCallbacks) do
+            Config.Gear["Selected Gears"][gName] = true
+            cb(true)
+        end
+        saveConfig()
+        addLog("Semua individual gear di-select.", THEME.Green)
+    end)
+
+    deselectAllGearBtn.MouseButton1Click:Connect(function()
+        if not Config.Gear["Selected Gears"] then Config.Gear["Selected Gears"] = {} end
+        for gName, cb in pairs(individualGearCallbacks) do
+            Config.Gear["Selected Gears"][gName] = false
+            cb(false)
+        end
+        saveConfig()
+        addLog("Semua individual gear di-deselect.", THEME.Red)
+    end)
+
+    local gearGroups = {
+        {
+            slot = "Back",
+            title = "🎒 SLOT: BACK (Punggung)",
+            subtitle = "Enol's Drums, Reaper's Scythe, Vampire Cape, Zangetsu, dll",
+            gears = {
+                { name = "Enol's Drums", rarity = "Divine" },
+                { name = "Reaper's Scythe", rarity = "Haunted" },
+                { name = "Vampire Cape", rarity = "Haunted" },
+                { name = "Ichiga's Zangetsu", rarity = "Legendary" },
+                { name = "Jogu's Robe", rarity = "Legendary" },
+                { name = "Obita's War Fan", rarity = "Legendary" },
+                { name = "Pikolo's Cape", rarity = "Legendary" },
+                { name = "Shizui's Tanto", rarity = "Rare" }
+            }
+        },
+        {
+            slot = "Head",
+            title = "👑 SLOT: HEAD (Kepala)",
+            subtitle = "Igras's Helm, Obita's Mask, Pumpkin Head, Bamboo, dll",
+            gears = {
+                { name = "Igras's Helm", rarity = "Divine" },
+                { name = "Obita's Mask", rarity = "Divine" },
+                { name = "Pumpkin Head", rarity = "Haunted" },
+                { name = "Golden Hair", rarity = "Rare" },
+                { name = "Nezuka's Bamboo", rarity = "Rare" },
+                { name = "Ulquiro's Mask", rarity = "Rare" },
+                { name = "Usop's Hat", rarity = "Rare" }
+            }
+        },
+        {
+            slot = "Torso",
+            title = "🥋 SLOT: TORSO (Badan)",
+            subtitle = "Mazun's Coat, Mummy Wraps, Monarch's Coat, Todoh's Vest",
+            gears = {
+                { name = "Mazun's Coat", rarity = "Divine" },
+                { name = "Mummy Wraps", rarity = "Haunted" },
+                { name = "Monarch's Coat", rarity = "Legendary" },
+                { name = "Todoh's Vest", rarity = "Rare" }
+            }
+        },
+        {
+            slot = "Upper",
+            title = "✨ SLOT: UPPER (Atas / Aura)",
+            subtitle = "Angel's Halo, Ghost Wisps",
+            gears = {
+                { name = "Angel's Halo", rarity = "Divine" },
+                { name = "Ghost Wisps", rarity = "Haunted" }
+            }
+        },
+        {
+            slot = "Waist",
+            title = "⚔️ SLOT: WAIST (Pinggang)",
+            subtitle = "Aizan's Katana, Sakuna's Sash, Candy Bucket, Tanjuro, Zaro, Jinwoo",
+            gears = {
+                { name = "Aizan's Katana", rarity = "Divine" },
+                { name = "Sakuna's Sash", rarity = "Divine" },
+                { name = "Candy Bucket", rarity = "Haunted" },
+                { name = "Tanjuro's Katana", rarity = "Legendary" },
+                { name = "Zaro's Swords", rarity = "Legendary" },
+                { name = "Jinwoo's Daggers", rarity = "Rare" }
+            }
+        }
+    }
+
+    local function addIndividualGearToggle(parent, gearName, rarity)
+        local initialVal = true
+        if Config.Gear["Selected Gears"] and Config.Gear["Selected Gears"][gearName] ~= nil then
+            initialVal = Config.Gear["Selected Gears"][gearName]
+        end
+
+        local card = Instance.new("Frame")
+        card.Size = UDim2.new(1, 0, 0, 34)
+        card.BackgroundColor3 = THEME.Card
+        card.BorderSizePixel = 0
+        card.Parent = parent
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 6)
+        corner.Parent = card
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -70, 1, 0)
+        lbl.Position = UDim2.new(0, 12, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Font = Enum.Font.Gotham
+        lbl.TextSize = 12
+        lbl.TextColor3 = THEME.Text
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Text = string.format("%s [%s]", gearName, rarity)
+        lbl.Parent = card
+
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 48, 0, 22)
+        btn.Position = UDim2.new(1, -58, 0.5, -11)
+        btn.BackgroundColor3 = initialVal and THEME.Green or THEME.Border
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 11
+        btn.TextColor3 = initialVal and THEME.Bg or THEME.TextMuted
+        btn.Text = initialVal and "ON" or "OFF"
+        btn.AutoButtonColor = false
+        btn.Parent = card
+
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.CornerRadius = UDim.new(0, 11)
+        btnCorner.Parent = btn
+
+        local curState = initialVal
+        local function setVisualState(newState)
+            curState = newState
+            btn.BackgroundColor3 = curState and THEME.Green or THEME.Border
+            btn.TextColor3 = curState and THEME.Bg or THEME.TextMuted
+            btn.Text = curState and "ON" or "OFF"
+        end
+
+        individualGearCallbacks[gearName] = setVisualState
+
+        btn.MouseButton1Click:Connect(function()
+            curState = not curState
+            setVisualState(curState)
+            if not Config.Gear["Selected Gears"] then Config.Gear["Selected Gears"] = {} end
+            Config.Gear["Selected Gears"][gearName] = curState
+            saveConfig()
+        end)
+    end
+
+    for _, group in ipairs(gearGroups) do
+        createSectionHeader(GearTab, group.title, group.subtitle)
+        for _, gInfo in ipairs(group.gears) do
+            addIndividualGearToggle(GearTab, gInfo.name, gInfo.rarity)
+        end
+    end
+end
+
+-- 4.6 Settings & Hop Tab
 do
     createToggle(SettingsTab, "Stop Trade Saat Kosong (Hentikan Jika Habis)", Config.Settings["Stop When Empty"], function(val)
         Config.Settings["Stop When Empty"] = val
@@ -1864,6 +2257,95 @@ local function getEligibleBoosts()
     return eligibleBoosts
 end
 
+local function getEligibleGear()
+    local eligibleGear = {}
+    if not (Config.Gear and Config.Gear.Enabled) then return eligibleGear end
+
+    local inv = nil
+    pcall(function()
+        inv = DataController and DataController.Inventory and DataController.Inventory()
+    end)
+    if not inv then return eligibleGear end
+
+    local equippedSet = {}
+    if Config.Gear["Keep Equipped"] then
+        pcall(function()
+            local eqGears = nil
+            if DataController.EquippedGear then
+                eqGears = DataController.EquippedGear()
+            elseif DataController.___X and DataController.___X.EquippedGear then
+                eqGears = DataController.___X.EquippedGear
+            end
+            if type(eqGears) == "table" then
+                for _, gName in pairs(eqGears) do
+                    if gName and gName ~= "" then
+                        equippedSet[gName] = (equippedSet[gName] or 0) + 1
+                    end
+                end
+            end
+        end)
+    end
+
+    for id, itemGetter in pairs(inv) do
+        local item = type(itemGetter) == "function" and itemGetter() or itemGetter
+        if item and item.name then
+            local entryConfig = EntryRegistry and EntryRegistry.getEntryConfig(item.name)
+            local kind = entryConfig and entryConfig.kind or "Unknown"
+
+            if kind == "Gear" then
+                local isTradeable = true
+                if TradeConfigModule and TradeConfigModule.IsTradeable then
+                    local s, res = pcall(function() return TradeConfigModule.IsTradeable(item) end)
+                    if s then isTradeable = (res == true) end
+                elseif TradeConfigModule and TradeConfigModule.UNTRADEABLE_ENTRIES then
+                    isTradeable = not table.find(TradeConfigModule.UNTRADEABLE_ENTRIES, item.name)
+                end
+
+                if isTradeable then
+                    local rarity = entryConfig and entryConfig.rarity or "Unknown"
+                    local slot = entryConfig and entryConfig.slot or "Unknown"
+
+                    local rarityMatch = (Config.Gear.Rarities and Config.Gear.Rarities[rarity] == true)
+                    local slotMatch = (Config.Gear.Slots and Config.Gear.Slots[slot] == true)
+
+                    local individualMatch = true
+                    if Config.Gear["Selected Gears"] and type(Config.Gear["Selected Gears"]) == "table" then
+                        if Config.Gear["Selected Gears"][item.name] ~= nil then
+                            individualMatch = (Config.Gear["Selected Gears"][item.name] == true)
+                        end
+                    end
+
+                    local whitelistMatch = true
+                    if Config.Gear["Whitelist Gear"] and #Config.Gear["Whitelist Gear"] > 0 then
+                        whitelistMatch = table.find(Config.Gear["Whitelist Gear"], item.name) ~= nil
+                    end
+
+                    if rarityMatch and slotMatch and individualMatch and whitelistMatch then
+                        local keep = tonumber(Config.Gear["Keep Amount"]) or 0
+                        if Config.Gear["Keep Equipped"] and (equippedSet[item.name] and equippedSet[item.name] > 0) then
+                            keep = math.max(keep, equippedSet[item.name])
+                        end
+
+                        local currentAmt = tonumber(item.amount) or 0
+                        local toSend = currentAmt - keep
+                        if toSend > 0 then
+                            table.insert(eligibleGear, {
+                                id = tostring(id),
+                                name = item.name,
+                                amount = toSend,
+                                rarity = rarity,
+                                slot = slot,
+                                kind = "Gear"
+                            })
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return eligibleGear
+end
+
 local function hasItemsToSend()
     local units = getEligibleUnits()
     if #units > 0 then return true end
@@ -1873,6 +2355,9 @@ local function hasItemsToSend()
 
     local boosts = getEligibleBoosts()
     if #boosts > 0 then return true end
+
+    local gear = getEligibleGear()
+    if #gear > 0 then return true end
 
     return false
 end
@@ -2063,6 +2548,7 @@ InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(ev
                 local eligibleUnits = getEligibleUnits()
                 local eligibleTokens = getEligibleTokens()
                 local eligibleBoosts = getEligibleBoosts()
+                local eligibleGear = getEligibleGear()
                 local totalOffered = 0
                 local maxEntries = (TradeConfigModule and TradeConfigModule.MAX_UNIQUE_ENTRIES) or 20
 
@@ -2086,6 +2572,14 @@ InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(ev
                     if not inTradeSession or totalOffered >= maxEntries then break end
                     addLog(string.format("Offering Boost: %s x%d", b.name, b.amount), THEME.Accent)
                     ChangeOfferRemote:FireServer(b.id, b.amount)
+                    totalOffered = totalOffered + 1
+                    task.wait(offerDelay)
+                end
+
+                for _, g in ipairs(eligibleGear) do
+                    if not inTradeSession or totalOffered >= maxEntries then break end
+                    addLog(string.format("Offering Gear: %s [%s] x%d", g.name, g.rarity, g.amount), THEME.Accent)
+                    ChangeOfferRemote:FireServer(g.id, g.amount)
                     totalOffered = totalOffered + 1
                     task.wait(offerDelay)
                 end
