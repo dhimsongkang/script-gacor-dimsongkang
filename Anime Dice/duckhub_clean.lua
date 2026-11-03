@@ -127,6 +127,10 @@ local DEFAULT_CONFIG = {
         ["Enabled"] = false,
         ["Mode"] = "Rarity",
         ["Rarities"] = {
+            ["Common"] = false,
+            ["Uncommon"] = false,
+            ["Rare"] = false,
+            ["Epic"] = false,
             ["Legendary"] = false,
             ["Mythical"] = true,
             ["Divine"] = true,
@@ -135,11 +139,14 @@ local DEFAULT_CONFIG = {
             ["Secret I"] = true,
             ["Secret II"] = true,
             ["Heavenly"] = true,
+            ["Galactic"] = true,
+            ["Cosmic"] = true,
             ["Exclusive"] = true,
         },
         ["Whitelist Units"] = {},
         ["Keep Equipped"] = true,
         ["Keep Locked"] = true,
+        ["Keep Tower Team"] = true,
     },
     ["Tokens"] = {
         ["Gems"] = { ["Enabled"] = true, ["Keep Amount"] = 0 },
@@ -149,6 +156,12 @@ local DEFAULT_CONFIG = {
     ["Spins"] = {
         ["Lucky Spin"] = { ["Enabled"] = true, ["Keep Amount"] = 0 },
         ["Jackpot Spin"] = { ["Enabled"] = true, ["Keep Amount"] = 0 },
+        ["Mega Jackpot"] = { ["Enabled"] = true, ["Keep Amount"] = 0 },
+        ["Grand Jackpot"] = { ["Enabled"] = true, ["Keep Amount"] = 0 },
+        ["Daily Jackpot"] = { ["Enabled"] = true, ["Keep Amount"] = 0 },
+        ["Pumpkin Spin"] = { ["Enabled"] = true, ["Keep Amount"] = 0 },
+        ["Pumpkin Jackpot"] = { ["Enabled"] = true, ["Keep Amount"] = 0 },
+        ["Witch's Jackpot"] = { ["Enabled"] = true, ["Keep Amount"] = 0 },
     },
     ["Boosts"] = {
         ["Enabled"] = true,
@@ -179,6 +192,10 @@ local DEFAULT_CONFIG = {
             ["Luck"] = true,
             ["Damage"] = true,
             ["Income"] = true,
+            ["Spooky Luck"] = true,
+            ["Candy Pot"] = true,
+            ["Pumpkin Pot"] = true,
+            ["Haunted Potion"] = true,
         },
         ["Categories"] = {
             "Soul Luck", "Soul Damage", "Soul Income",
@@ -188,7 +205,8 @@ local DEFAULT_CONFIG = {
             "Pirate Luck", "Pirate Damage", "Pirate Income",
             "Cursed Luck", "Cursed Damage", "Cursed Income",
             "Dragon Luck", "Dragon Damage", "Dragon Income",
-            "Luck", "Damage", "Income"
+            "Luck", "Damage", "Income",
+            "Spooky Luck", "Candy Pot", "Pumpkin Pot", "Haunted Potion"
         }
     },
     ["Gear"] = {
@@ -245,6 +263,7 @@ local DEFAULT_CONFIG = {
         ["Offer Delay"] = 0.3,
         ["Ready Wait Time"] = 1.0,
         ["Anti AFK"] = true,
+        ["Safety Delay"] = 0.5,
     },
     ["Hop"] = {
         ["Enabled"] = true,
@@ -266,6 +285,23 @@ local DEFAULT_CONFIG = {
         ["Protect Exclusive"] = true,
         ["Free Slots"] = 20,
         ["Max Sell Per Run"] = 10,
+        ["Rarities"] = {
+            ["Common"] = true,
+            ["Uncommon"] = true,
+            ["Rare"] = true,
+            ["Epic"] = true,
+            ["Legendary"] = false,
+            ["Mythical"] = false,
+            ["Divine"] = false,
+            ["Celestial"] = false,
+            ["Exotic"] = false,
+            ["Secret I"] = false,
+            ["Secret II"] = false,
+            ["Heavenly"] = false,
+            ["Galactic"] = false,
+            ["Cosmic"] = false,
+            ["Exclusive"] = false,
+        },
     },
     ["Auto Change"] = {
         ["Enabled"] = true,
@@ -1295,31 +1331,37 @@ end
 do
     createToggle(UnitsTab, "Units Auto-Trade Enabled", Config.Units.Enabled, function(val)
         Config.Units.Enabled = val
+        saveConfig()
     end)
 
     createToggle(UnitsTab, "Keep Equipped Units (Simpan Unit Terpakai)", Config.Units["Keep Equipped"], function(val)
         Config.Units["Keep Equipped"] = val
+        saveConfig()
     end)
 
     createToggle(UnitsTab, "Keep Locked Units (Simpan Unit Terkunci)", Config.Units["Keep Locked"], function(val)
         Config.Units["Keep Locked"] = val
+        saveConfig()
     end)
 
-    local secLabel = Instance.new("TextLabel")
-    secLabel.Size = UDim2.new(1, 0, 0, 24)
-    secLabel.BackgroundTransparency = 1
-    secLabel.Font = Enum.Font.GothamBold
-    secLabel.TextSize = 12
-    secLabel.TextColor3 = THEME.Accent
-    secLabel.TextXAlignment = Enum.TextXAlignment.Left
-    secLabel.Text = "Filter Rarity yang Dikirim ke Receiver:"
-    secLabel.Parent = UnitsTab
+    createToggle(UnitsTab, "Keep Tower Team (Simpan Tim Tower)", Config.Units["Keep Tower Team"] ~= false, function(val)
+        Config.Units["Keep Tower Team"] = val
+        saveConfig()
+    end)
 
-    local rarities = { "Legendary", "Mythical", "Divine", "Celestial", "Exotic", "Secret I", "Secret II", "Heavenly", "Exclusive" }
+    createSectionHeader(UnitsTab, "⭐ FILTER RARITY UNIT", "Pilih rarity unit yang akan ditransfer ke Receiver")
+
+    local rarities = {
+        "Common", "Uncommon", "Rare", "Epic", "Legendary",
+        "Mythical", "Divine", "Celestial", "Exotic",
+        "Secret I", "Secret II", "Heavenly", "Galactic", "Cosmic", "Exclusive"
+    }
     for _, r in ipairs(rarities) do
-        local isEnabled = Config.Units.Rarities[r] == true
-        createToggle(UnitsTab, "  Transfer: " .. r, isEnabled, function(val)
+        local isEnabled = Config.Units.Rarities and Config.Units.Rarities[r] == true
+        createToggle(UnitsTab, "Transfer: " .. r, isEnabled, function(val)
+            if not Config.Units.Rarities then Config.Units.Rarities = {} end
             Config.Units.Rarities[r] = val
+            saveConfig()
         end)
     end
 end
@@ -1372,6 +1414,27 @@ do
         Config.Spins["Jackpot Spin"]["Keep Amount"] = tonumber(val) or 0
         saveConfig()
     end)
+
+    createSectionHeader(TokensTab, "🎰 SEMUA JENIS JACKPOT & EVENT SPINS", "Aktifkan transfer untuk varian jackpot dan spin event lainnya")
+
+    local additionalSpins = {
+        "Mega Jackpot", "Grand Jackpot", "Daily Jackpot",
+        "Pumpkin Spin", "Pumpkin Jackpot", "Witch's Jackpot"
+    }
+    for _, spinName in ipairs(additionalSpins) do
+        local isEn = Config.Spins[spinName] and Config.Spins[spinName].Enabled ~= false
+        local keepAmt = (Config.Spins[spinName] and Config.Spins[spinName]["Keep Amount"]) or 0
+        createToggle(TokensTab, "Transfer " .. spinName, isEn, function(val)
+            if not Config.Spins[spinName] then Config.Spins[spinName] = { ["Enabled"] = true, ["Keep Amount"] = 0 } end
+            Config.Spins[spinName].Enabled = val
+            saveConfig()
+        end)
+        createTextInput(TokensTab, spinName .. " Keep Amount", keepAmt, function(val)
+            if not Config.Spins[spinName] then Config.Spins[spinName] = { ["Enabled"] = true, ["Keep Amount"] = 0 } end
+            Config.Spins[spinName]["Keep Amount"] = tonumber(val) or 0
+            saveConfig()
+        end)
+    end
 end
 
 -- 4.4 Potions Tab (Tower Potions / Boosts)
@@ -1498,6 +1561,11 @@ do
             title = "♾️ INFINITY TOWER (Infinity)",
             subtitle = "Tier I - IV: General Luck, Damage, Income",
             potions = { "Luck", "Damage", "Income" }
+        },
+        {
+            title = "🎃 EVENT & HALLOWEEN POTIONS",
+            subtitle = "Spooky Luck, Candy Pot, Pumpkin Pot, Haunted Potion",
+            potions = { "Spooky Luck", "Candy Pot", "Pumpkin Pot", "Haunted Potion" }
         }
     }
 
