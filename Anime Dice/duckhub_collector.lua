@@ -967,11 +967,27 @@ local function writeLocalSenderQueue(q)
     end)
 end
 
+local function getCustomQueueServerUrl()
+    local u = Config and Config.Hop and Config.Hop["Queue Server URL"]
+    if type(u) == "string" then
+        u = u:gsub("^%s+", ""):gsub("%s+$", ""):gsub("/+$", "")
+        if #u > 4 and (u:sub(1, 7) == "http://" or u:sub(1, 8) == "https://") then
+            return u
+        end
+    end
+    return nil
+end
+
 local function postCloudQueueEvent(payloadTable)
     local reqFn = getHttpRequestFn()
     if not reqFn then return false end
-    local topic = getCloudQueueTopic()
-    local url = "https://ntfy.sh/" .. topic
+    local customUrl = getCustomQueueServerUrl()
+    local url
+    if customUrl then
+        url = customUrl .. "/event"
+    else
+        url = "https://ntfy.sh/" .. getCloudQueueTopic()
+    end
     local ok, res = pcall(function()
         return reqFn({
             Url = url,
@@ -987,7 +1003,49 @@ local function postCloudQueueEvent(payloadTable)
 end
 
 local function fetchCloudSenderQueue()
-    -- Rate-limit proteksi di sisi Receiver: jangan GET lebih cepat dari 5 detik sekali (gunakan cache)
+    local customUrl = getCustomQueueServerUrl()
+
+    -- Jika memakai Custom HTTP Server sendiri (bebas limit!), langsung GET /queue
+    if customUrl then
+        local url = customUrl .. "/queue"
+        local rawBody = nil
+        local reqFn = getHttpRequestFn()
+        if reqFn then
+            pcall(function()
+                local res = reqFn({
+                    Url = url,
+                    Method = "GET",
+                    Headers = { ["User-Agent"] = "Mozilla/5.0" }
+                })
+                if res and (tonumber(res.StatusCode or res.Status) == 200) then
+                    rawBody = res.Body or res.body
+                end
+            end)
+        end
+        if not rawBody then
+            pcall(function()
+                rawBody = game:HttpGet(url)
+            end)
+        end
+        if rawBody and #rawBody > 2 then
+            pcall(function()
+                local decoded = HttpService:JSONDecode(rawBody)
+                if type(decoded) == "table" and type(decoded.queue) == "table" then
+                    local cleanQ = {}
+                    for uname, entry in pairs(decoded.queue) do
+                        local doneSenderAt = completedSessionSenders[tostring(uname):lower()]
+                        if not (doneSenderAt and (os.time() - doneSenderAt <= 45)) then
+                            cleanQ[uname] = entry
+                        end
+                    end
+                    cachedCloudQueue = cleanQ
+                end
+            end)
+        end
+        return cachedCloudQueue
+    end
+
+    -- Fallback ntfy.sh: Rate-limit proteksi di sisi Receiver (jangan GET lebih cepat dari 5 detik sekali)
     if (tick() - lastCloudFetchTime < 5.0) and next(cachedCloudQueue) ~= nil then
         return cachedCloudQueue
     end
@@ -2313,6 +2371,11 @@ do
 
     createToggle(SettingsTab, "Aktifkan Collector Hop (Receiver PC Join Sender VPS 1-per-1)", Config.Hop.Enabled ~= false, function(val)
         Config.Hop.Enabled = val
+        saveConfig()
+    end)
+
+    createTextInput(SettingsTab, "Queue Server URL (Domain Sendiri / Kosong = Auto)", Config.Hop["Queue Server URL"] or "", function(val)
+        Config.Hop["Queue Server URL"] = tostring(val or ""):gsub("^%s+", ""):gsub("%s+$", "")
         saveConfig()
     end)
 
