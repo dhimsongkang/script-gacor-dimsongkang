@@ -968,6 +968,7 @@ local function writeLocalSenderQueue(q)
 end
 
 local DEFAULT_QUEUE_SERVER_URL = "https://dimsong.online"
+local DUCKHUB_HANDSHAKE_SIGNATURE = "DUCKHUB_V2_VERIFIED"
 
 local function getTargetReceiverName()
     local r = tostring((Config and Config.Receiver) or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -1003,8 +1004,13 @@ end
 local function postCloudQueueEvent(payloadTable)
     local reqFn = getHttpRequestFn()
     if not reqFn then return false end
-    if type(payloadTable) == "table" and not payloadTable.receiver then
-        payloadTable.receiver = getTargetReceiverName()
+    if type(payloadTable) == "table" then
+        if not payloadTable.receiver then
+            payloadTable.receiver = getTargetReceiverName()
+        end
+        if not payloadTable.handshake then
+            payloadTable.handshake = DUCKHUB_HANDSHAKE_SIGNATURE
+        end
     end
     local customUrl = getCustomQueueServerUrl()
     local url
@@ -1223,6 +1229,52 @@ local function readCombinedSenderQueue()
     return combined
 end
 
+local function verifyDuckHubHandshake(senderName)
+    if not senderName or senderName == "" then return false end
+    -- Jika pengguna mematikan fitur Handshake DuckHub Only secara manual di Settings
+    if Config and Config.Settings and Config.Settings["Handshake DuckHub Only"] == false then
+        return true
+    end
+
+    local sLow = tostring(senderName):lower():gsub("^%s+", ""):gsub("%s+$", "")
+
+    -- 1. Cek jika masuk di Whitelist Senders manual
+    if Config and type(Config["Whitelist Senders"]) == "table" then
+        for _, w in ipairs(Config["Whitelist Senders"]) do
+            if tostring(w):lower():gsub("^%s+", ""):gsub("%s+$", "") == sLow then
+                return true
+            end
+        end
+    end
+
+    -- 2. Cek di cache antrean aktif (0ms)
+    local function checkInMap(mapTbl)
+        if type(mapTbl) ~= "table" then return false end
+        for uname, entry in pairs(mapTbl) do
+            if tostring(uname):lower() == sLow and type(entry) == "table" and isEntryForThisReceiver(entry) then
+                local hs = tostring(entry.Handshake or entry.handshake or DUCKHUB_HANDSHAKE_SIGNATURE)
+                if hs == DUCKHUB_HANDSHAKE_SIGNATURE then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+
+    if checkInMap(cachedCloudQueue) or checkInMap(readLocalSenderQueue()) then
+        return true
+    end
+
+    -- 3. Jika belum ada di cache lokal (misal bot baru saja masuk server detik ini), paksa refresh cepat dari dimsong.online
+    lastCloudFetchTime = 0
+    local freshQ = readCombinedSenderQueue()
+    if checkInMap(freshQ) then
+        return true
+    end
+
+    return false
+end
+
 local function removeSenderFromQueue(username, optionalJobId)
     if not username or username == "" then return end
     completedSessionSenders[tostring(username):lower()] = os.time()
@@ -1297,6 +1349,7 @@ local function updateSelfInSenderQueue(hasItems, forceCloudNow)
             q[LocalPlayer.Name] = {
                 Username = LocalPlayer.Name,
                 Receiver = targetRec,
+                Handshake = DUCKHUB_HANDSHAKE_SIGNATURE,
                 JobId = tostring(game.JobId),
                 PlaceId = tonumber(game.PlaceId),
                 Players = #Players:GetPlayers(),
@@ -1323,6 +1376,7 @@ local function updateSelfInSenderQueue(hasItems, forceCloudNow)
                         action = "READY",
                         username = LocalPlayer.Name,
                         receiver = targetRec,
+                        handshake = DUCKHUB_HANDSHAKE_SIGNATURE,
                         jobId = tostring(game.JobId),
                         placeId = tonumber(game.PlaceId),
                         players = #Players:GetPlayers(),
@@ -2407,6 +2461,11 @@ do
         Config.Settings["Ready Wait Time"] = tonumber(val) or 1.0
     end)
 
+    createToggle(SettingsTab, "Handshake DuckHub Only (Tolak Trade Pemain Publik/Random)", Config.Settings["Handshake DuckHub Only"] ~= false, function(val)
+        Config.Settings["Handshake DuckHub Only"] = val
+        saveConfig()
+    end)
+
     createToggle(SettingsTab, "Aktifkan Collector Hop (Receiver PC Join Sender VPS 1-per-1)", Config.Hop.Enabled ~= false, function(val)
         Config.Hop.Enabled = val
         saveConfig()
@@ -2970,12 +3029,12 @@ InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(ev
                 addLog("Sedang sibuk trade dengan bot lain, menunda request dari: " .. sender.Name, THEME.Yellow)
                 return
             end
-            if isAllowedSender(sender.Name) then
+            if isAllowedSender(sender.Name) and verifyDuckHubHandshake(sender.Name) then
                 lastAcceptRequestTime = tick()
-                addLog("Menerima request trade dari: " .. sender.Name, THEME.Green)
+                addLog("[Handshake OK] Menerima request trade dari DuckHub: " .. sender.Name, THEME.Green)
                 RespondToRequestRemote:FireServer(true)
             else
-                addLog("Menolak request trade dari non-whitelist: " .. sender.Name, THEME.Red)
+                addLog("[Handshake DITOLAK] Menolak trade dari non-DuckHub/publik: " .. sender.Name, THEME.Red)
                 RespondToRequestRemote:FireServer(false)
             end
         else
