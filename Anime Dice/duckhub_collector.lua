@@ -1263,11 +1263,7 @@ local function getNextWaitingSender()
         if type(entry) == "table" and entry.HasItems and entry.JobId and entry.JobId ~= "" then
             local jid = tostring(entry.JobId)
             if uname:lower() ~= LocalPlayer.Name:lower() and jid ~= tostring(game.JobId) and not completedSessionJobIds[jid] then
-                local curP = tonumber(entry.Players) or 1
-                local maxP = tonumber(entry.MaxPlayers) or 12
-                if curP < maxP then
-                    table.insert(candidates, entry)
-                end
+                table.insert(candidates, entry)
             end
         end
     end
@@ -2320,11 +2316,6 @@ do
         saveConfig()
     end)
 
-    createToggle(SettingsTab, "Sender VPS Auto Pindah Jika Server Penuh (Beri Ruang Receiver)", Config.Hop["Receiver Auto Hop If Full"] ~= false, function(val)
-        Config.Hop["Receiver Auto Hop If Full"] = val
-        saveConfig()
-    end)
-
     createButton(SettingsTab, "🗑️ Bersihkan Antrean JobId Cloud & Lokal (Reset Queue)", THEME.Red, function()
         writeLocalSenderQueue({})
         cachedCloudQueue = {}
@@ -3180,10 +3171,12 @@ InstanceManager:Spawn(function()
                     return
                 end
 
-                -- 2. Cek apakah Receiver sudah datang ke server ini
+                -- 2. Daftarkan/perbarui JobId ke Cloud Queue (VPS -> PC, refresh setiap 45-60s)
+                updateSelfInSenderQueue(true, false)
+
+                -- 3. Cek apakah Receiver sudah datang ke server ini
                 local recPlayer = findReceiverPlayer()
                 if recPlayer then
-                    updateSelfInSenderQueue(true, false)
                     StatusBadge.Text = "SENDER [READY]"
                     StatusBadge.TextColor3 = THEME.Green
                     -- Jeda unik per-UserId (6s - 8.5s) agar jika ada 2+ bot di 1 server tidak bentrok terus-menerus
@@ -3194,31 +3187,8 @@ InstanceManager:Spawn(function()
                         RequestTradeRemote:FireServer(recPlayer)
                     end
                 else
-                    local maxP = tonumber(Players.MaxPlayers) or 9
-                    local curP = #Players:GetPlayers()
-
-                    -- Jika server penuh (misal 9/9) dan Receiver BELUM ada di dalam, jangan kirim READY (cegah spam READY <-> EMPTY!)
-                    if curP >= maxP and Config.Hop and (Config.Hop["Receiver Auto Hop If Full"] ~= false) then
-                        StatusBadge.Text = "SENDER [SERVER FULL]"
-                        StatusBadge.TextColor3 = THEME.Yellow
-                        updateSelfInSenderQueue(false, false)
-                        if not isHopping then
-                            -- Jeda bertahap per-UserId agar hanya 1-2 bot yang pindah lebih dulu; jika slot terbuka (< maxP), sisa bot tidak perlu pindah!
-                            local hopStagger = ((tonumber(LocalPlayer.UserId) or 0) % 5) * 2.5
-                            task.spawn(function()
-                                task.wait(hopStagger)
-                                if not isHopping and not findReceiverPlayer() and #Players:GetPlayers() >= (tonumber(Players.MaxPlayers) or 9) then
-                                    addLog("Server penuh (" .. #Players:GetPlayers() .. "/" .. maxP .. "). Pindah ke server sepi agar Receiver bisa masuk...", THEME.Yellow)
-                                    hopToLowestServer()
-                                end
-                            end)
-                        end
-                    else
-                        -- Server masih punya ruang (< maxP): daftarkan/perbarui JobId ke Cloud Queue (setiap 45-60s)
-                        updateSelfInSenderQueue(true, false)
-                        StatusBadge.Text = "SENDER [IN QUEUE]"
-                        StatusBadge.TextColor3 = THEME.Accent
-                    end
+                    StatusBadge.Text = "SENDER [IN QUEUE]"
+                    StatusBadge.TextColor3 = THEME.Accent
                 end
             else
                 -- ROLE == "Receiver" di PC (Collector 1-per-1 Lintas VPS, Mendukung Banyak Bot di 1 JobId)
