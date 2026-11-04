@@ -969,6 +969,26 @@ end
 
 local DEFAULT_QUEUE_SERVER_URL = "https://dimsong.online"
 
+local function getTargetReceiverName()
+    local r = tostring((Config and Config.Receiver) or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if r == "" and LocalPlayer then
+        r = tostring(LocalPlayer.Name)
+    end
+    return r
+end
+
+local function isEntryForThisReceiver(entry)
+    if type(entry) ~= "table" then return false end
+    local myRec = getTargetReceiverName():lower()
+    if myRec == "" then return true end
+    local entryRec = tostring(entry.Receiver or entry.receiver or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+    -- Jika entri menyertakan variabel Receiver, wajib cocok dengan Receiver kita!
+    if entryRec ~= "" then
+        return entryRec == myRec or (LocalPlayer and entryRec == tostring(LocalPlayer.Name):lower())
+    end
+    return true
+end
+
 local function getCustomQueueServerUrl()
     local u = Config and Config.Hop and Config.Hop["Queue Server URL"]
     if type(u) == "string" then
@@ -983,6 +1003,9 @@ end
 local function postCloudQueueEvent(payloadTable)
     local reqFn = getHttpRequestFn()
     if not reqFn then return false end
+    if type(payloadTable) == "table" and not payloadTable.receiver then
+        payloadTable.receiver = getTargetReceiverName()
+    end
     local customUrl = getCustomQueueServerUrl()
     local url
     if customUrl then
@@ -1007,9 +1030,10 @@ end
 local function fetchCloudSenderQueue()
     local customUrl = getCustomQueueServerUrl()
 
-    -- Jika memakai Custom HTTP Server sendiri (bebas limit!), langsung GET /queue
+    -- Jika memakai Custom HTTP Server sendiri (https://dimsong.online), langsung GET /queue?receiver=<nama_receiver>
     if customUrl then
-        local url = customUrl .. "/queue"
+        local targetRec = getTargetReceiverName()
+        local url = customUrl .. "/queue?receiver=" .. HttpService:UrlEncode(targetRec)
         local rawBody = nil
         local reqFn = getHttpRequestFn()
         if reqFn then
@@ -1036,7 +1060,7 @@ local function fetchCloudSenderQueue()
                     local cleanQ = {}
                     for uname, entry in pairs(decoded.queue) do
                         local doneSenderAt = completedSessionSenders[tostring(uname):lower()]
-                        if not (doneSenderAt and (os.time() - doneSenderAt <= 45)) then
+                        if isEntryForThisReceiver(entry) and not (doneSenderAt and (os.time() - doneSenderAt <= 45)) then
                             cleanQ[uname] = entry
                         end
                     end
@@ -1125,7 +1149,9 @@ local function fetchCloudSenderQueue()
             local jid = tostring(ev.jobId or "")
 
             if act == "CLEAR_ALL" then
-                cloudQueue = {}
+                if isEntryForThisReceiver(ev) then
+                    cloudQueue = {}
+                end
             elseif act == "EMPTY" then
                 if uname ~= "" then
                     -- Hapus HANYA akun bot yang sudah kosong ini! Bot lain di JobId yang sama tetap aman di antrean!
@@ -1140,14 +1166,15 @@ local function fetchCloudSenderQueue()
                     end
                 end
             elseif act == "READY" and uname ~= "" and jid ~= "" then
-                -- Cek apakah akun bot spesifik ini baru saja selesai di sisi lokal Receiver (< 45 detik lalu)
+                -- Cek apakah akun bot spesifik ini baru saja selesai di sisi lokal Receiver (< 45 detik lalu) & cocok dengan Receiver kita
                 local doneSenderAt = completedSessionSenders[uname:lower()]
-                if not doneSenderAt or (os.time() - doneSenderAt > 45) then
+                if isEntryForThisReceiver(ev) and (not doneSenderAt or (os.time() - doneSenderAt > 45)) then
                     -- Jika ada bot aktif di JobId ini, buka kunci JobId agar tidak terblokir
                     completedSessionJobIds[jid] = nil
                     local prev = cloudQueue[uname]
                     cloudQueue[uname] = {
                         Username = uname,
+                        Receiver = tostring(ev.receiver or getTargetReceiverName()),
                         JobId = jid,
                         PlaceId = tonumber(ev.placeId) or game.PlaceId,
                         Players = tonumber(ev.players) or 1,
@@ -1181,14 +1208,16 @@ local function readCombinedSenderQueue()
     for uname, entry in pairs(combined) do
         local doneSenderAt = completedSessionSenders[uname:lower()]
         local isSenderDone = doneSenderAt and (now - doneSenderAt <= 45)
-        if type(entry) ~= "table" or (now - (tonumber(entry.LastSeen) or 0) > 180) or isSenderDone or completedSessionJobIds[tostring(entry.JobId)] then
+        if type(entry) ~= "table" or not isEntryForThisReceiver(entry) or (now - (tonumber(entry.LastSeen) or 0) > 180) or isSenderDone or completedSessionJobIds[tostring(entry.JobId)] then
             combined[uname] = nil
         end
     end
 
     local cloud = fetchCloudSenderQueue()
     for uname, entry in pairs(cloud) do
-        combined[uname] = entry
+        if isEntryForThisReceiver(entry) then
+            combined[uname] = entry
+        end
     end
 
     return combined
@@ -1209,6 +1238,7 @@ local function removeSenderFromQueue(username, optionalJobId)
             postCloudQueueEvent({
                 action = "EMPTY",
                 username = tostring(username),
+                receiver = getTargetReceiverName(),
                 jobId = tostring(jid),
                 seq = tick()
             })
@@ -1241,6 +1271,7 @@ local function removeJobIdFromQueue(targetJobId)
             postCloudQueueEvent({
                 action = "EMPTY",
                 username = "",
+                receiver = getTargetReceiverName(),
                 jobId = tostring(targetJobId),
                 seq = tick()
             })
@@ -1253,6 +1284,7 @@ local function updateSelfInSenderQueue(hasItems, forceCloudNow)
     pcall(function()
         local q = readLocalSenderQueue()
         local now = os.time()
+        local targetRec = getTargetReceiverName()
 
         for uname, entry in pairs(q) do
             if type(entry) ~= "table" or (now - (tonumber(entry.LastSeen) or 0) > 180) then
@@ -1264,6 +1296,7 @@ local function updateSelfInSenderQueue(hasItems, forceCloudNow)
             local prev = q[LocalPlayer.Name]
             q[LocalPlayer.Name] = {
                 Username = LocalPlayer.Name,
+                Receiver = targetRec,
                 JobId = tostring(game.JobId),
                 PlaceId = tonumber(game.PlaceId),
                 Players = #Players:GetPlayers(),
@@ -1289,6 +1322,7 @@ local function updateSelfInSenderQueue(hasItems, forceCloudNow)
                     postCloudQueueEvent({
                         action = "READY",
                         username = LocalPlayer.Name,
+                        receiver = targetRec,
                         jobId = tostring(game.JobId),
                         placeId = tonumber(game.PlaceId),
                         players = #Players:GetPlayers(),
@@ -1308,6 +1342,7 @@ local function updateSelfInSenderQueue(hasItems, forceCloudNow)
                 postCloudQueueEvent({
                     action = "EMPTY",
                     username = LocalPlayer.Name,
+                    receiver = targetRec,
                     jobId = tostring(game.JobId),
                     seq = tick()
                 })
@@ -1321,7 +1356,7 @@ local function getNextWaitingSender()
     local candidates = {}
 
     for uname, entry in pairs(q) do
-        if type(entry) == "table" and entry.HasItems and entry.JobId and entry.JobId ~= "" then
+        if type(entry) == "table" and entry.HasItems and entry.JobId and entry.JobId ~= "" and isEntryForThisReceiver(entry) then
             local jid = tostring(entry.JobId)
             if uname:lower() ~= LocalPlayer.Name:lower() and jid ~= tostring(game.JobId) and not completedSessionJobIds[jid] then
                 table.insert(candidates, entry)
@@ -3269,9 +3304,9 @@ InstanceManager:Spawn(function()
                 if inTradeSession or isHopping then return end
                 local activeSendersInCurrentServer = {}
 
-                -- 1. Periksa SEMUA akun Sender yang ada di server (JobId) saat ini
+                -- 1. Periksa SEMUA akun Sender yang ada di server (JobId) saat ini dan ditujukan untuk Receiver ini
                 for uname, entry in pairs(q) do
-                    if type(entry) == "table" and tostring(entry.JobId) == tostring(game.JobId) then
+                    if type(entry) == "table" and isEntryForThisReceiver(entry) and tostring(entry.JobId) == tostring(game.JobId) then
                         local pObj = nil
                         for _, p in ipairs(Players:GetPlayers()) do
                             if p ~= LocalPlayer and p.Name:lower() == uname:lower() then
