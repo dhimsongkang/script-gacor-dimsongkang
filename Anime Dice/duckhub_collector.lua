@@ -3171,11 +3171,11 @@ InstanceManager:Spawn(function()
                     StatusBadge.Text = "SENDER [IN QUEUE]"
                     StatusBadge.TextColor3 = THEME.Accent
 
-                    -- Jika server penuh sampai Receiver tidak mungkin bisa masuk, Sender pindah ke server sepi
+                    -- Jika server hampir penuh (>= maxPlayers - 1) sampai Receiver berisiko gagal masuk (GameFull), Sender pindah ke server sepi
                     if not isHopping and Config.Hop and (Config.Hop["Receiver Auto Hop If Full"] ~= false) then
                         local maxP = tonumber(Players.MaxPlayers) or 12
-                        if #Players:GetPlayers() >= maxP then
-                            addLog("Server penuh (" .. #Players:GetPlayers() .. "/" .. maxP .. "). Pindah ke server sepi agar Receiver bisa masuk...", THEME.Yellow)
+                        if #Players:GetPlayers() >= (maxP - 1) then
+                            addLog("Server penuh/hampir penuh (" .. #Players:GetPlayers() .. "/" .. maxP .. "). Pindah ke server sepi agar Receiver bisa masuk...", THEME.Yellow)
                             updateSelfInSenderQueue(false, true)
                             hopToLowestServer()
                         end
