@@ -967,6 +967,8 @@ local function writeLocalSenderQueue(q)
     end)
 end
 
+local DEFAULT_QUEUE_SERVER_URL = "https://dimsong.online"
+
 local function getCustomQueueServerUrl()
     local u = Config and Config.Hop and Config.Hop["Queue Server URL"]
     if type(u) == "string" then
@@ -975,7 +977,7 @@ local function getCustomQueueServerUrl()
             return u
         end
     end
-    return nil
+    return DEFAULT_QUEUE_SERVER_URL
 end
 
 local function postCloudQueueEvent(payloadTable)
@@ -1042,11 +1044,13 @@ local function fetchCloudSenderQueue()
                 end
             end)
         end
-        return cachedCloudQueue
+        if next(cachedCloudQueue) ~= nil or (tick() - lastCloudFetchTime < 15.0) then
+            return cachedCloudQueue
+        end
     end
 
-    -- Fallback ntfy.sh: Rate-limit proteksi di sisi Receiver (jangan GET lebih cepat dari 5 detik sekali)
-    if (tick() - lastCloudFetchTime < 5.0) and next(cachedCloudQueue) ~= nil then
+    -- Fallback / Bridge ntfy.sh (untuk sesi bot lama yang belum re-execute): jangan GET lebih cepat dari 15 detik sekali
+    if (tick() - lastCloudFetchTime < 15.0) and next(cachedCloudQueue) ~= nil then
         return cachedCloudQueue
     end
     lastCloudFetchTime = tick()
@@ -1270,9 +1274,8 @@ local function updateSelfInSenderQueue(hasItems, forceCloudNow)
             }
             writeLocalSenderQueue(q)
 
-            -- Kirim heartbeat ke Cloud setiap 45-60 detik (acak per UserId) atau saat JobId berubah
-            -- (Mencegah HTTP 429 rate-limit di ntfy.sh walaupun ada puluhan bot di 1 IP VPS!)
-            local hbInterval = 45 + ((tonumber(LocalPlayer.UserId) or 0) % 16)
+            -- Kirim heartbeat ke Server Domain Sendiri (https://dimsong.online) setiap 15-20 detik (bebas limit!)
+            local hbInterval = 15 + ((tonumber(LocalPlayer.UserId) or 0) % 6)
             local shouldPostCloud = forceCloudNow
                 or (lastBroadcastedState ~= "READY")
                 or (lastBroadcastedJobId ~= tostring(game.JobId))
@@ -2374,7 +2377,7 @@ do
         saveConfig()
     end)
 
-    createTextInput(SettingsTab, "Queue Server URL (Domain Sendiri / Kosong = Auto)", Config.Hop["Queue Server URL"] or "", function(val)
+    createTextInput(SettingsTab, "Queue Server URL (Domain Sendiri)", Config.Hop["Queue Server URL"] or DEFAULT_QUEUE_SERVER_URL, function(val)
         Config.Hop["Queue Server URL"] = tostring(val or ""):gsub("^%s+", ""):gsub("%s+$", "")
         saveConfig()
     end)
