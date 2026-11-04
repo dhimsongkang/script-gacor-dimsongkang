@@ -917,6 +917,8 @@ local lastBroadcastedJobId = nil
 local lastBroadcastedState = nil
 local lastAcceptRequestTime = 0
 local lastTradeEndedTime = 0
+local lastCloudFetchTime = 0
+local cachedCloudQueue = {} -- Cache in-memory agar jika ntfy.sh kena limit HTTP 429 sesaat, antrean tidak hilang/kosong!
 local completedSessionJobIds = {} -- Memory guard hanya untuk JobId yang gagal dimasuki / sudah 100% bersih semua bot-nya
 local completedSessionSenders = {} -- Memory guard per-username agar jika 1 JobId ada >1 bot, bot lain di JobId sama tidak ikut terhapus!
 
@@ -985,10 +987,16 @@ local function postCloudQueueEvent(payloadTable)
 end
 
 local function fetchCloudSenderQueue()
-    local cloudQueue = {}
+    -- Rate-limit proteksi di sisi Receiver: jangan GET lebih cepat dari 5 detik sekali (gunakan cache)
+    if (tick() - lastCloudFetchTime < 5.0) and next(cachedCloudQueue) ~= nil then
+        return cachedCloudQueue
+    end
+    lastCloudFetchTime = tick()
+
     local topic = getCloudQueueTopic()
-    local url = "https://ntfy.sh/" .. topic .. "/json?poll=1&since=3m"
+    local url = "https://ntfy.sh/" .. topic .. "/json?poll=1&since=5m"
     local rawBody = nil
+    local statusCode = 0
 
     local reqFn = getHttpRequestFn()
     if reqFn then
@@ -998,19 +1006,28 @@ local function fetchCloudSenderQueue()
                 Method = "GET",
                 Headers = { ["User-Agent"] = "Mozilla/5.0" }
             })
-            if res and (res.StatusCode == 200 or res.Status == 200) then
-                rawBody = res.Body or res.body
+            if res then
+                statusCode = tonumber(res.StatusCode or res.Status) or 0
+                if statusCode == 200 then
+                    rawBody = res.Body or res.body
+                end
             end
         end)
     end
 
-    if not rawBody then
+    if not rawBody and statusCode ~= 429 then
         pcall(function()
             rawBody = game:HttpGet(url)
         end)
     end
 
-    if rawBody and #rawBody > 0 then
+    -- Jika terkena HTTP 429 (rate limit ntfy.sh) atau gagal jaringan sementara, pertahankan cachedCloudQueue!
+    if not rawBody then
+        return cachedCloudQueue
+    end
+
+    local cloudQueue = {}
+    if #rawBody > 0 then
         local events = {}
         for line in tostring(rawBody):gmatch("[^\r\n]+") do
             pcall(function()
@@ -1051,7 +1068,6 @@ local function fetchCloudSenderQueue()
                 if uname ~= "" then
                     -- Hapus HANYA akun bot yang sudah kosong ini! Bot lain di JobId yang sama tetap aman di antrean!
                     cloudQueue[uname] = nil
-                    completedSessionSenders[uname:lower()] = os.time()
                 elseif jid ~= "" then
                     -- Hanya jika event EMPTY tidak menyebut username (misal JobId error/mati), baru hapus berdasarkan JobId
                     completedSessionJobIds[jid] = os.time()
@@ -1062,7 +1078,7 @@ local function fetchCloudSenderQueue()
                     end
                 end
             elseif act == "READY" and uname ~= "" and jid ~= "" then
-                -- Cek apakah akun bot spesifik ini baru saja selesai (< 45 detik lalu)
+                -- Cek apakah akun bot spesifik ini baru saja selesai di sisi lokal Receiver (< 45 detik lalu)
                 local doneSenderAt = completedSessionSenders[uname:lower()]
                 if not doneSenderAt or (os.time() - doneSenderAt > 45) then
                     -- Jika ada bot aktif di JobId ini, buka kunci JobId agar tidak terblokir
@@ -1073,7 +1089,7 @@ local function fetchCloudSenderQueue()
                         JobId = jid,
                         PlaceId = tonumber(ev.placeId) or game.PlaceId,
                         Players = tonumber(ev.players) or 1,
-                        MaxPlayers = tonumber(ev.maxPlayers) or 12,
+                        MaxPlayers = tonumber(ev.maxPlayers) or 9,
                         HasItems = true,
                         RegisteredAt = (prev and tonumber(prev.RegisteredAt)) or tonumber(ev._serverTime) or os.time(),
                         LastSeen = tonumber(ev._serverTime) or os.time(),
@@ -1083,15 +1099,16 @@ local function fetchCloudSenderQueue()
             end
         end
 
-        -- Bersihkan entri Cloud yang sudah tidak kirim heartbeat > 45 detik
+        -- Bersihkan entri Cloud yang sudah tidak kirim heartbeat > 180 detik (3 menit)
         for uname, entry in pairs(cloudQueue) do
             local ref = tonumber(entry._nowRef) or os.time()
-            if (ref - (tonumber(entry.LastSeen) or 0)) > 45 then
+            if (ref - (tonumber(entry.LastSeen) or 0)) > 180 then
                 cloudQueue[uname] = nil
             end
         end
     end
 
+    cachedCloudQueue = cloudQueue
     return cloudQueue
 end
 
@@ -1102,7 +1119,7 @@ local function readCombinedSenderQueue()
     for uname, entry in pairs(combined) do
         local doneSenderAt = completedSessionSenders[uname:lower()]
         local isSenderDone = doneSenderAt and (now - doneSenderAt <= 45)
-        if type(entry) ~= "table" or (now - (tonumber(entry.LastSeen) or 0) > 45) or isSenderDone or completedSessionJobIds[tostring(entry.JobId)] then
+        if type(entry) ~= "table" or (now - (tonumber(entry.LastSeen) or 0) > 180) or isSenderDone or completedSessionJobIds[tostring(entry.JobId)] then
             combined[uname] = nil
         end
     end
@@ -1118,6 +1135,7 @@ end
 local function removeSenderFromQueue(username, optionalJobId)
     if not username or username == "" then return end
     completedSessionSenders[tostring(username):lower()] = os.time()
+    cachedCloudQueue[tostring(username)] = nil
     pcall(function()
         local q = readLocalSenderQueue()
         local jid = optionalJobId or (q[username] and q[username].JobId) or ""
@@ -1140,6 +1158,11 @@ end
 local function removeJobIdFromQueue(targetJobId)
     if not targetJobId or targetJobId == "" then return end
     completedSessionJobIds[tostring(targetJobId)] = os.time()
+    for uname, entry in pairs(cachedCloudQueue) do
+        if type(entry) == "table" and tostring(entry.JobId) == tostring(targetJobId) then
+            cachedCloudQueue[uname] = nil
+        end
+    end
     pcall(function()
         local q = readLocalSenderQueue()
         local changed = false
@@ -1170,7 +1193,7 @@ local function updateSelfInSenderQueue(hasItems, forceCloudNow)
         local now = os.time()
 
         for uname, entry in pairs(q) do
-            if type(entry) ~= "table" or (now - (tonumber(entry.LastSeen) or 0) > 45) then
+            if type(entry) ~= "table" or (now - (tonumber(entry.LastSeen) or 0) > 180) then
                 q[uname] = nil
             end
         end
@@ -1182,18 +1205,20 @@ local function updateSelfInSenderQueue(hasItems, forceCloudNow)
                 JobId = tostring(game.JobId),
                 PlaceId = tonumber(game.PlaceId),
                 Players = #Players:GetPlayers(),
-                MaxPlayers = tonumber(Players.MaxPlayers) or 12,
+                MaxPlayers = tonumber(Players.MaxPlayers) or 9,
                 HasItems = true,
                 RegisteredAt = (type(prev) == "table" and tonumber(prev.RegisteredAt)) or now,
                 LastSeen = now
             }
             writeLocalSenderQueue(q)
 
-            -- Kirim heartbeat ke Cloud setiap 12 detik atau saat JobId berubah (agar VPS <-> PC tersinkronisasi real-time)
+            -- Kirim heartbeat ke Cloud setiap 45-60 detik (acak per UserId) atau saat JobId berubah
+            -- (Mencegah HTTP 429 rate-limit di ntfy.sh walaupun ada puluhan bot di 1 IP VPS!)
+            local hbInterval = 45 + ((tonumber(LocalPlayer.UserId) or 0) % 16)
             local shouldPostCloud = forceCloudNow
                 or (lastBroadcastedState ~= "READY")
                 or (lastBroadcastedJobId ~= tostring(game.JobId))
-                or (tick() - lastCloudHeartbeatTime >= 12)
+                or (tick() - lastCloudHeartbeatTime >= hbInterval)
 
             if shouldPostCloud then
                 lastCloudHeartbeatTime = tick()
@@ -1206,19 +1231,19 @@ local function updateSelfInSenderQueue(hasItems, forceCloudNow)
                         jobId = tostring(game.JobId),
                         placeId = tonumber(game.PlaceId),
                         players = #Players:GetPlayers(),
-                        maxPlayers = tonumber(Players.MaxPlayers) or 12,
+                        maxPlayers = tonumber(Players.MaxPlayers) or 9,
                         seq = tick()
                     })
                 end)
             end
         else
-            -- Jika sudah kosong, langsung hapus JobId akun ini dari Local & Cloud Queue!
+            -- Jika sudah kosong, langsung hapus akun ini dari Local & Cloud Queue!
             q[LocalPlayer.Name] = nil
             writeLocalSenderQueue(q)
 
-            if lastBroadcastedState ~= "EMPTY" or forceCloudNow then
+            if lastBroadcastedState == "READY" or forceCloudNow then
                 lastBroadcastedState = "EMPTY"
-                -- Kirim secara sinkron (blocking singkat) agar sebelum game:Shutdown() sinyal hapus JobId sudah masuk ke Cloud!
+                -- Kirim secara sinkron (blocking singkat) agar sebelum game:Shutdown() sinyal hapus sudah masuk ke Cloud!
                 postCloudQueueEvent({
                     action = "EMPTY",
                     username = LocalPlayer.Name,
@@ -1328,9 +1353,11 @@ local function hopToLowestServer(isForced)
                 end)
 
                 if #candidates > 0 then
-                    targetServerId = candidates[1].id
-                    targetPlaying = candidates[1].playing
-                    targetPing = candidates[1].ping or 0
+                    -- Pilih acak dari 15 server paling sepi agar banyak bot di VPS tidak menumpuk ke 1 server yang sama!
+                    local pickIdx = math.random(1, math.min(15, #candidates))
+                    targetServerId = candidates[pickIdx].id
+                    targetPlaying = candidates[pickIdx].playing
+                    targetPing = candidates[pickIdx].ping or 0
                 end
             end
         end)
@@ -2300,6 +2327,7 @@ do
 
     createButton(SettingsTab, "🗑️ Bersihkan Antrean JobId Cloud & Lokal (Reset Queue)", THEME.Red, function()
         writeLocalSenderQueue({})
+        cachedCloudQueue = {}
         completedSessionJobIds = {}
         completedSessionSenders = {}
         task.spawn(function()
@@ -3152,12 +3180,10 @@ InstanceManager:Spawn(function()
                     return
                 end
 
-                -- 2. Jika masih punya barang: daftarkan/perbarui JobId ke Cloud Queue (VPS -> PC)
-                updateSelfInSenderQueue(true, false)
-
-                -- 3. Cek apakah Receiver sudah datang ke server ini
+                -- 2. Cek apakah Receiver sudah datang ke server ini
                 local recPlayer = findReceiverPlayer()
                 if recPlayer then
+                    updateSelfInSenderQueue(true, false)
                     StatusBadge.Text = "SENDER [READY]"
                     StatusBadge.TextColor3 = THEME.Green
                     -- Jeda unik per-UserId (6s - 8.5s) agar jika ada 2+ bot di 1 server tidak bentrok terus-menerus
@@ -3168,17 +3194,30 @@ InstanceManager:Spawn(function()
                         RequestTradeRemote:FireServer(recPlayer)
                     end
                 else
-                    StatusBadge.Text = "SENDER [IN QUEUE]"
-                    StatusBadge.TextColor3 = THEME.Accent
+                    local maxP = tonumber(Players.MaxPlayers) or 9
+                    local curP = #Players:GetPlayers()
 
-                    -- Jika server hampir penuh (>= maxPlayers - 1) sampai Receiver berisiko gagal masuk (GameFull), Sender pindah ke server sepi
-                    if not isHopping and Config.Hop and (Config.Hop["Receiver Auto Hop If Full"] ~= false) then
-                        local maxP = tonumber(Players.MaxPlayers) or 12
-                        if #Players:GetPlayers() >= (maxP - 1) then
-                            addLog("Server penuh/hampir penuh (" .. #Players:GetPlayers() .. "/" .. maxP .. "). Pindah ke server sepi agar Receiver bisa masuk...", THEME.Yellow)
-                            updateSelfInSenderQueue(false, true)
-                            hopToLowestServer()
+                    -- Jika server penuh (misal 9/9) dan Receiver BELUM ada di dalam, jangan kirim READY (cegah spam READY <-> EMPTY!)
+                    if curP >= maxP and Config.Hop and (Config.Hop["Receiver Auto Hop If Full"] ~= false) then
+                        StatusBadge.Text = "SENDER [SERVER FULL]"
+                        StatusBadge.TextColor3 = THEME.Yellow
+                        updateSelfInSenderQueue(false, false)
+                        if not isHopping then
+                            -- Jeda bertahap per-UserId agar hanya 1-2 bot yang pindah lebih dulu; jika slot terbuka (< maxP), sisa bot tidak perlu pindah!
+                            local hopStagger = ((tonumber(LocalPlayer.UserId) or 0) % 5) * 2.5
+                            task.spawn(function()
+                                task.wait(hopStagger)
+                                if not isHopping and not findReceiverPlayer() and #Players:GetPlayers() >= (tonumber(Players.MaxPlayers) or 9) then
+                                    addLog("Server penuh (" .. #Players:GetPlayers() .. "/" .. maxP .. "). Pindah ke server sepi agar Receiver bisa masuk...", THEME.Yellow)
+                                    hopToLowestServer()
+                                end
+                            end)
                         end
+                    else
+                        -- Server masih punya ruang (< maxP): daftarkan/perbarui JobId ke Cloud Queue (setiap 45-60s)
+                        updateSelfInSenderQueue(true, false)
+                        StatusBadge.Text = "SENDER [IN QUEUE]"
+                        StatusBadge.TextColor3 = THEME.Accent
                     end
                 end
             else
@@ -3191,6 +3230,7 @@ InstanceManager:Spawn(function()
                 if not (Config.Hop and Config.Hop.Enabled ~= false) then return end
 
                 local q = readCombinedSenderQueue()
+                if inTradeSession or isHopping then return end
                 local activeSendersInCurrentServer = {}
 
                 -- 1. Periksa SEMUA akun Sender yang ada di server (JobId) saat ini
