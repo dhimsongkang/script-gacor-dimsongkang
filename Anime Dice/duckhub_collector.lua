@@ -1355,7 +1355,7 @@ local function queueCollectorOnTeleport()
                 elseif isfile and loadfile and isfile("DuckHub/duckhub_collector.lua") then
                     loadfile("DuckHub/duckhub_collector.lua")()
                 else
-                    loadstring(game:HttpGet("https://raw.githubusercontent.com/dhimsongkang/script-gacor-dimsongkang/main/Anime%20Dice/duckhub_collector.lua"))()
+                    loadstring(game:HttpGet("https://raw.githubusercontent.com/dhimsongkang/script-gacor-dimsongkang/main/Anime%20Dice/duckhub_collector.lua?t=" .. tostring(tick())))()
                 end
             ]])
         end
