@@ -915,7 +915,10 @@ local isTeleportQueued = false
 local lastCloudHeartbeatTime = 0
 local lastBroadcastedJobId = nil
 local lastBroadcastedState = nil
-local completedSessionJobIds = {} -- Memory guard agar Receiver tidak masuk ulang ke JobId yang baru saja selesai
+local lastAcceptRequestTime = 0
+local lastTradeEndedTime = 0
+local completedSessionJobIds = {} -- Memory guard hanya untuk JobId yang gagal dimasuki / sudah 100% bersih semua bot-nya
+local completedSessionSenders = {} -- Memory guard per-username agar jika 1 JobId ada >1 bot, bot lain di JobId sama tidak ikut terhapus!
 
 local function getHttpRequestFn()
     return (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
@@ -1046,9 +1049,11 @@ local function fetchCloudSenderQueue()
                 cloudQueue = {}
             elseif act == "EMPTY" then
                 if uname ~= "" then
+                    -- Hapus HANYA akun bot yang sudah kosong ini! Bot lain di JobId yang sama tetap aman di antrean!
                     cloudQueue[uname] = nil
-                end
-                if jid ~= "" then
+                    completedSessionSenders[uname:lower()] = os.time()
+                elseif jid ~= "" then
+                    -- Hanya jika event EMPTY tidak menyebut username (misal JobId error/mati), baru hapus berdasarkan JobId
                     completedSessionJobIds[jid] = os.time()
                     for k, v in pairs(cloudQueue) do
                         if tostring(v.JobId) == jid then
@@ -1057,9 +1062,11 @@ local function fetchCloudSenderQueue()
                     end
                 end
             elseif act == "READY" and uname ~= "" and jid ~= "" then
-                -- Abaikan jika JobId ini baru saja ditandai selesai (< 45 detik lalu)
-                local doneAt = completedSessionJobIds[jid]
-                if not doneAt or (os.time() - doneAt > 45) then
+                -- Cek apakah akun bot spesifik ini baru saja selesai (< 45 detik lalu)
+                local doneSenderAt = completedSessionSenders[uname:lower()]
+                if not doneSenderAt or (os.time() - doneSenderAt > 45) then
+                    -- Jika ada bot aktif di JobId ini, buka kunci JobId agar tidak terblokir
+                    completedSessionJobIds[jid] = nil
                     local prev = cloudQueue[uname]
                     cloudQueue[uname] = {
                         Username = uname,
@@ -1093,7 +1100,9 @@ local function readCombinedSenderQueue()
     local now = os.time()
 
     for uname, entry in pairs(combined) do
-        if type(entry) ~= "table" or (now - (tonumber(entry.LastSeen) or 0) > 45) or completedSessionJobIds[tostring(entry.JobId)] then
+        local doneSenderAt = completedSessionSenders[uname:lower()]
+        local isSenderDone = doneSenderAt and (now - doneSenderAt <= 45)
+        if type(entry) ~= "table" or (now - (tonumber(entry.LastSeen) or 0) > 45) or isSenderDone or completedSessionJobIds[tostring(entry.JobId)] then
             combined[uname] = nil
         end
     end
@@ -1108,15 +1117,13 @@ end
 
 local function removeSenderFromQueue(username, optionalJobId)
     if not username or username == "" then return end
+    completedSessionSenders[tostring(username):lower()] = os.time()
     pcall(function()
         local q = readLocalSenderQueue()
         local jid = optionalJobId or (q[username] and q[username].JobId) or ""
         if q[username] ~= nil then
             q[username] = nil
             writeLocalSenderQueue(q)
-        end
-        if jid ~= "" then
-            completedSessionJobIds[tostring(jid)] = os.time()
         end
         task.spawn(function()
             postCloudQueueEvent({
@@ -1126,7 +1133,7 @@ local function removeSenderFromQueue(username, optionalJobId)
                 seq = tick()
             })
         end)
-        print("[DuckHub Collector] Menghapus JobId milik " .. tostring(username) .. " dari Cloud & Local Queue.")
+        print("[DuckHub Collector] Menghapus akun Sender " .. tostring(username) .. " dari Cloud & Local Queue (bot lain di JobId sama tetap aman).")
     end)
 end
 
@@ -1136,10 +1143,8 @@ local function removeJobIdFromQueue(targetJobId)
     pcall(function()
         local q = readLocalSenderQueue()
         local changed = false
-        local removedUser = ""
         for uname, entry in pairs(q) do
             if type(entry) == "table" and tostring(entry.JobId) == tostring(targetJobId) then
-                removedUser = uname
                 q[uname] = nil
                 changed = true
             end
@@ -1150,12 +1155,12 @@ local function removeJobIdFromQueue(targetJobId)
         task.spawn(function()
             postCloudQueueEvent({
                 action = "EMPTY",
-                username = removedUser,
+                username = "",
                 jobId = tostring(targetJobId),
                 seq = tick()
             })
         end)
-        print("[DuckHub Collector] Menghapus JobId tidak valid/kosong dari Cloud & Local Queue: " .. tostring(targetJobId))
+        print("[DuckHub Collector] Menghapus JobId mati/penuh dari Cloud & Local Queue: " .. tostring(targetJobId))
     end)
 end
 
@@ -2296,6 +2301,7 @@ do
     createButton(SettingsTab, "🗑️ Bersihkan Antrean JobId Cloud & Lokal (Reset Queue)", THEME.Red, function()
         writeLocalSenderQueue({})
         completedSessionJobIds = {}
+        completedSessionSenders = {}
         task.spawn(function()
             postCloudQueueEvent({ action = "CLEAR_ALL", seq = tick() })
         end)
@@ -2840,7 +2846,12 @@ InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(ev
         if not sender then return end
 
         if role == "Receiver" then
+            if inTradeSession or (tick() - lastAcceptRequestTime < 2.8) then
+                addLog("Sedang sibuk trade dengan bot lain, menunda request dari: " .. sender.Name, THEME.Yellow)
+                return
+            end
             if isAllowedSender(sender.Name) then
+                lastAcceptRequestTime = tick()
                 addLog("Menerima request trade dari: " .. sender.Name, THEME.Green)
                 RespondToRequestRemote:FireServer(true)
             else
@@ -2850,7 +2861,7 @@ InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(ev
         else
             if isReceiverPlayer(sender) then
                 if Config.Settings and Config.Settings["Stop When Empty"] and not hasItemsToSend() then
-                    addLog("Menolak trade dari Receiver (inventaris kosong). Menghapus JobId di Cloud...", THEME.TextMuted)
+                    addLog("Menolak trade dari Receiver (inventaris kosong). Menghapus akun dari Cloud Queue...", THEME.TextMuted)
                     RespondToRequestRemote:FireServer(false)
                     updateSelfInSenderQueue(false, true)
                     triggerFarmerV5Switch("Inventaris Kosong Saat Trade Request")
@@ -3031,18 +3042,22 @@ InstanceManager:AddConnection(TradeEventRemote.OnClientEvent:Connect(function(ev
         StatusBadge.Text = role:upper() .. " [IDLE]"
         StatusBadge.TextColor3 = THEME.Cyan
 
+        lastTradeEndedTime = tick()
+        lastAcceptRequestTime = 0
+
         if role == "Sender" then
             -- Segera cek apakah setelah trade ini inventori Sender di VPS sudah habis
             task.spawn(function()
                 task.wait(1.2)
                 if not inTradeSession and not hasItemsToSend() then
-                    addLog("Semua item telah ditransfer! Menghapus JobId dari Cloud Queue & kirim sinyal ke FarmerV5...", THEME.Green)
+                    addLog("Semua item telah ditransfer! Menghapus akun dari Cloud Queue & kirim sinyal ke FarmerV5...", THEME.Green)
                     updateSelfInSenderQueue(false, true)
                     StatusBadge.Text = "SENDER [KOSONG]"
                     StatusBadge.TextColor3 = THEME.TextMuted
                     triggerFarmerV5Switch("Trade Selesai & Inventaris Kosong")
                 elseif not inTradeSession then
-                    -- Masih ada sisa batch berikutnya, perbarui heartbeat antrean
+                    -- Masih ada sisa batch berikutnya (item > 20), percepat request batch ke-2 & perbarui heartbeat antrean
+                    lastRequestTime = tick() - 4.5
                     updateSelfInSenderQueue(true, true)
                 end
             end)
@@ -3098,9 +3113,9 @@ InstanceManager:Spawn(function()
     end
 end)
 
--- Collector Mode Engine Loop (Sender VPS Broadcasts JobId to Cloud -> Receiver PC Joins Senders 1-by-1)
+-- Collector Mode Engine Loop (Sender VPS Broadcasts JobId to Cloud -> Receiver PC Joins Senders 1-by-1 & Multi-Bot Safe)
 InstanceManager:Spawn(function()
-    while InstanceManager.IsAlive and task.wait(4) do
+    while InstanceManager.IsAlive and task.wait(3.5) do
         local loopOk, loopErr = pcall(function()
             if not Config.Enabled or not InstanceManager.IsAlive then return end
             local role = getRole()
@@ -3124,14 +3139,14 @@ InstanceManager:Spawn(function()
 
                 -- 1. Cek apakah inventori Sender di VPS sudah kosong (termasuk saat akun baru login)
                 if not hasItemsToSend() then
-                    -- Hapus JobId akun ini dari Cloud & Local Queue agar Receiver di PC tidak datang ke sini
+                    -- Hapus akun ini saja dari Cloud & Local Queue (bot lain di JobId sama tetap aman)
                     updateSelfInSenderQueue(false, false)
 
                     if tick() - lastEmptyNoticeTime >= 15 then
                         lastEmptyNoticeTime = tick()
                         StatusBadge.Text = "SENDER [KOSONG]"
                         StatusBadge.TextColor3 = THEME.TextMuted
-                        addLog("Inventaris kosong. JobId dihapus dari Cloud Queue & mengirim sinyal ke FarmerV5...", THEME.TextMuted)
+                        addLog("Inventaris kosong. Akun dihapus dari Cloud Queue & mengirim sinyal ke FarmerV5...", THEME.TextMuted)
                     end
                     triggerFarmerV5Switch("Inventaris Kosong")
                     return
@@ -3145,7 +3160,9 @@ InstanceManager:Spawn(function()
                 if recPlayer then
                     StatusBadge.Text = "SENDER [READY]"
                     StatusBadge.TextColor3 = THEME.Green
-                    if tick() - lastRequestTime >= 7 then
+                    -- Jeda unik per-UserId (6s - 8.5s) agar jika ada 2+ bot di 1 server tidak bentrok terus-menerus
+                    local reqInterval = 6.0 + ((tonumber(LocalPlayer.UserId) or 0) % 5) * 0.5
+                    if tick() - lastRequestTime >= reqInterval then
                         lastRequestTime = tick()
                         addLog("Receiver ada di server! Mengirim trade request ke: " .. Config.Receiver, THEME.Cyan)
                         RequestTradeRemote:FireServer(recPlayer)
@@ -3165,7 +3182,7 @@ InstanceManager:Spawn(function()
                     end
                 end
             else
-                -- ROLE == "Receiver" di PC (Collector 1-per-1 Lintas VPS)
+                -- ROLE == "Receiver" di PC (Collector 1-per-1 Lintas VPS, Mendukung Banyak Bot di 1 JobId)
                 pcall(function()
                     SetTradeRequestsEnabledRemote:FireServer(true)
                 end)
@@ -3174,9 +3191,9 @@ InstanceManager:Spawn(function()
                 if not (Config.Hop and Config.Hop.Enabled ~= false) then return end
 
                 local q = readCombinedSenderQueue()
-                local activeSenderInCurrentServer = nil
+                local activeSendersInCurrentServer = {}
 
-                -- 1. Periksa apakah di server saat ini ada akun Sender yang masih punya barang
+                -- 1. Periksa SEMUA akun Sender yang ada di server (JobId) saat ini
                 for uname, entry in pairs(q) do
                     if type(entry) == "table" and tostring(entry.JobId) == tostring(game.JobId) then
                         local pObj = nil
@@ -3188,32 +3205,46 @@ InstanceManager:Spawn(function()
                         end
 
                         if pObj and entry.HasItems and isAllowedSender(pObj.Name) then
-                            activeSenderInCurrentServer = pObj
-                            break
+                            table.insert(activeSendersInCurrentServer, {
+                                Player = pObj,
+                                Entry = entry
+                            })
                         elseif not pObj and (tick() - scriptStartTime >= 8) then
-                            -- Akun Sender di VPS sudah keluar dari server ini (di-swap FarmerV5), hapus JobId-nya dari Cloud!
-                            addLog("Sender [" .. uname .. "] sudah keluar dari server. Menghapus JobId dari Cloud Queue...", THEME.TextMuted)
+                            -- Akun Sender spesifik ini sudah keluar dari server (di-swap FarmerV5), hapus akun ini saja dari Cloud!
+                            addLog("Sender [" .. uname .. "] sudah keluar dari server. Menghapus akun dari Cloud Queue...", THEME.TextMuted)
                             removeSenderFromQueue(uname, tostring(game.JobId))
                         end
                     end
                 end
 
-                if activeSenderInCurrentServer then
-                    StatusBadge.Text = "COLLECTING: " .. string.sub(activeSenderInCurrentServer.Name, 1, 8)
+                -- Urutkan bot di server ini berdasarkan urutan daftar (FIFO)
+                table.sort(activeSendersInCurrentServer, function(a, b)
+                    local ra = tonumber(a.Entry.RegisteredAt) or 0
+                    local rb = tonumber(b.Entry.RegisteredAt) or 0
+                    if ra == rb then
+                        return a.Player.Name < b.Player.Name
+                    end
+                    return ra < rb
+                end)
+
+                if #activeSendersInCurrentServer > 0 then
+                    local firstBot = activeSendersInCurrentServer[1].Player
+                    StatusBadge.Text = string.format("COLLECT (%d BOT): %s", #activeSendersInCurrentServer, string.sub(firstBot.Name, 1, 7))
                     StatusBadge.TextColor3 = THEME.Green
                     if tick() - lastQueueLogTime >= 10 then
                         lastQueueLogTime = tick()
-                        addLog("Menunggu & memproses trade dari Sender di server ini: " .. activeSenderInCurrentServer.Name, THEME.Green)
+                        addLog(string.format("Ada %d bot aktif di server ini. Memproses antrean: %s", #activeSendersInCurrentServer, firstBot.Name), THEME.Green)
                     end
                     return
                 end
 
-                -- Beri jeda 6 detik saat baru masuk server sebelum memutuskan pindah lagi
-                if tick() - scriptStartTime < 6 then
+                -- Beri jeda 6 detik saat baru masuk server, ATAU 8 detik setelah trade terakhir selesai
+                -- (agar jika ada bot ke-2 / batch ke-2 di server yang sama sempat kirim request sebelum Receiver pindah)
+                if (tick() - scriptStartTime < 6) or (lastTradeEndedTime > 0 and (tick() - lastTradeEndedTime < 8)) then
                     return
                 end
 
-                -- Tandai server saat ini sudah bersih agar tidak dimasuki ulang
+                -- Semua bot di server ini sudah benar-benar habis! Tandai JobId ini bersih sementara
                 completedSessionJobIds[tostring(game.JobId)] = os.time()
 
                 -- 2. Tidak ada lagi Sender aktif di server ini -> Cari target Sender VPS berikutnya 1 per 1 dari Cloud Queue
@@ -3239,7 +3270,7 @@ InstanceManager:Spawn(function()
                             TeleportService:TeleportToPlaceInstance(tonumber(nextTarget.PlaceId) or game.PlaceId, tostring(nextTarget.JobId), LocalPlayer)
                         end)
                         if not tpOk then
-                            addLog("Gagal teleport ke Sender " .. tostring(nextTarget.Username) .. " (" .. tostring(tpErr) .. "). Menghapus JobId...", THEME.Red)
+                            addLog("Gagal teleport ke Sender " .. tostring(nextTarget.Username) .. " (" .. tostring(tpErr) .. "). Menghapus akun...", THEME.Red)
                             removeSenderFromQueue(nextTarget.Username, nextTarget.JobId)
                         end
                         task.wait(10)
@@ -3261,4 +3292,4 @@ InstanceManager:Spawn(function()
     end
 end)
 
-addLog("DuckHub Collector Mode (VPS <-> PC Cloud Sync 1-by-1) siap digunakan!", THEME.Accent)
+addLog("DuckHub Collector Mode (VPS <-> PC Cloud Sync 1-by-1 & Multi-Bot Per Server) siap digunakan!", THEME.Accent)
